@@ -59,7 +59,7 @@ function normalizeUsernameToEmail(rawInput: string): { email: string; displayNam
 function mapAuthErrorMessage(err: any): string {
   const code = err?.code || '';
   if (code === 'auth/operation-not-allowed') {
-    return 'Phương thức Đăng nhập Tên đăng nhập/Mật khẩu chưa được bật trong Firebase Console (Authentication > Sign-in method > Email/Password). Bạn có thể bật trong Firebase hoặc dùng nút Tiếp tục với Google.';
+    return 'Đăng nhập bằng Tên đăng nhập/Mật khẩu hiện chưa bật trên dự án Firebase (cần bật Email/Password trong Authentication). Bạn có thể bấm "Đăng nhập nhanh bằng Google" ngay bên dưới.';
   }
   if (code === 'auth/email-already-in-use') {
     return 'Tên đăng nhập này đã có người sử dụng. Vui lòng chọn tên khác hoặc chuyển sang Đăng nhập.';
@@ -539,7 +539,7 @@ export const FirestoreService = {
     uid: string,
     dataset: Omit<UploadedNasaDatasetDoc, 'id' | 'uploadedBy' | 'isPublic' | 'createdAt'>
   ): Promise<string> {
-    const datasetId = `NASA_DS_${Date.now()}`;
+    const datasetId = `NASA_DS_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     try {
       await setDoc(doc(db, 'nasa_datasets', datasetId), {
         version: dataset.version.slice(0, 80),
@@ -571,7 +571,7 @@ export const FirestoreService = {
       latestNasaDate?: string;
     }
   ): Promise<void> {
-    const logId = `SYNC_${Date.now()}`;
+    const logId = `SYNC_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     try {
       await setDoc(doc(db, 'nasa_sync_logs', logId), {
         syncType: log.syncType.slice(0, 40),
@@ -604,6 +604,61 @@ export const FirestoreService = {
           const tB = b.createdAt?.toMillis?.() || 0;
           return tB - tA;
         });
+    } catch {
+      return [];
+    }
+  },
+
+  async getAdminNasaDatasets(): Promise<UploadedNasaDatasetDoc[]> {
+    try {
+      const snap = await getDocs(collection(db, 'nasa_datasets'));
+      return snap.docs
+        .map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<UploadedNasaDatasetDoc, 'id'>),
+        }))
+        .sort((a, b) => {
+          const tA = a.createdAt?.toMillis?.() || 0;
+          const tB = b.createdAt?.toMillis?.() || 0;
+          return tB - tA;
+        });
+    } catch {
+      return [];
+    }
+  },
+
+  async getAdminSyncLogs(): Promise<
+    Array<{
+      id: string;
+      syncType: string;
+      targetCellsCount: number;
+      recordsSynced: number;
+      startTime: string;
+      endTime?: string;
+      status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'PARTIAL';
+      latestNasaDate?: string;
+    }>
+  > {
+    try {
+      const snap = await getDocs(collection(db, 'nasa_sync_logs'));
+      return snap.docs
+        .map((d) => {
+          const data = d.data();
+          const iso = data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString();
+          return {
+            id: d.id,
+            syncType: String(data.syncType || 'CSV_UPLOAD'),
+            targetCellsCount: Number(data.targetCellsCount) || 0,
+            recordsSynced: Number(data.recordsSynced) || 0,
+            startTime: iso,
+            endTime: iso,
+            status: (data.status || 'SUCCESS') as 'RUNNING' | 'SUCCESS' | 'FAILED' | 'PARTIAL',
+            latestNasaDate: data.latestNasaDate ? String(data.latestNasaDate) : undefined,
+            _ms: data.createdAt?.toMillis?.() || 0,
+          };
+        })
+        .sort((a, b) => b._ms - a._ms)
+        .map(({ _ms, ...rest }) => rest);
     } catch {
       return [];
     }

@@ -47,7 +47,7 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
       name: 'Nhiệt độ không khí (TB, Thấp, Cao)',
       unit: '°C',
       icon: Thermometer,
-      color: 'text-amber-600',
+      color: 'text-red-600',
     },
     {
       code: 'PRECTOTCORR',
@@ -71,7 +71,7 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
       name: 'Độ ẩm không khí',
       unit: '%',
       icon: Wind,
-      color: 'text-cyan-600',
+      color: 'text-purple-600',
     },
     {
       code: 'ALLSKY_SFC_SW_DWN',
@@ -79,7 +79,7 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
       name: 'Nắng & Bức xạ mặt trời',
       unit: 'MJ/m²/ngày',
       icon: Sun,
-      color: 'text-orange-600',
+      color: 'text-amber-500',
     },
   ];
 
@@ -142,16 +142,16 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
     }
   > = {
     T2M: {
-      barClass: 'bg-gradient-to-t from-emerald-500 via-amber-500 to-rose-600',
+      barClass: 'bg-gradient-to-t from-amber-300 via-orange-500 to-red-600',
       legendTitle: 'Thang màu Nhiệt độ không khí (°C):',
       swatches: [
-        { colorClass: 'bg-emerald-500', label: 'Mát / Lạnh (< 22°C)' },
-        { colorClass: 'bg-amber-500', label: 'Ấm vừa (22 – 29°C)' },
-        { colorClass: 'bg-rose-600', label: 'Nắng nóng cao (> 30°C)' },
+        { colorClass: 'bg-amber-300', label: 'Mát / Lạnh (< 22°C)' },
+        { colorClass: 'bg-orange-500', label: 'Ấm vừa (22 – 29°C)' },
+        { colorClass: 'bg-red-600', label: 'Nắng nóng cao (> 30°C)' },
       ],
     },
     PRECTOTCORR: {
-      barClass: 'bg-gradient-to-t from-blue-800 via-blue-500 to-sky-400',
+      barClass: 'bg-gradient-to-t from-sky-300 via-blue-500 to-blue-800',
       legendTitle: 'Thang màu Lượng mưa (mm/tháng):',
       swatches: [
         { colorClass: 'bg-sky-300', label: 'Mùa khô / Mưa ít (< 60 mm)' },
@@ -160,30 +160,30 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
       ],
     },
     GWETROOT: {
-      barClass: 'bg-gradient-to-t from-teal-800 via-emerald-600 to-emerald-400',
+      barClass: 'bg-gradient-to-t from-lime-400 via-emerald-500 to-teal-700',
       legendTitle: 'Thang màu Độ ẩm đất vùng rễ (%):',
       swatches: [
-        { colorClass: 'bg-emerald-300', label: 'Đất khô (< 40%)' },
-        { colorClass: 'bg-emerald-600', label: 'Đủ ẩm tối ưu (40 – 75%)' },
-        { colorClass: 'bg-teal-800', label: 'Rất ẩm / Dễ bão hòa (> 75%)' },
+        { colorClass: 'bg-lime-400', label: 'Đất khô (< 40%)' },
+        { colorClass: 'bg-emerald-500', label: 'Đủ ẩm tối ưu (40 – 75%)' },
+        { colorClass: 'bg-teal-700', label: 'Rất ẩm / Dễ bão hòa (> 75%)' },
       ],
     },
     RH2M: {
-      barClass: 'bg-gradient-to-t from-indigo-800 via-violet-500 to-purple-400',
+      barClass: 'bg-gradient-to-t from-fuchsia-300 via-purple-500 to-indigo-700',
       legendTitle: 'Thang màu Độ ẩm không khí (%):',
       swatches: [
-        { colorClass: 'bg-purple-300', label: 'Hanh khô (< 70%)' },
-        { colorClass: 'bg-violet-500', label: 'Dễ chịu (70 – 84%)' },
-        { colorClass: 'bg-indigo-800', label: 'Ẩm cao / Lưu ý nấm bệnh (≥ 85%)' },
+        { colorClass: 'bg-fuchsia-300', label: 'Hanh khô (< 70%)' },
+        { colorClass: 'bg-purple-500', label: 'Dễ chịu (70 – 84%)' },
+        { colorClass: 'bg-indigo-700', label: 'Ẩm cao / Lưu ý nấm bệnh (≥ 85%)' },
       ],
     },
     ALLSKY_SFC_SW_DWN: {
-      barClass: 'bg-gradient-to-t from-orange-600 via-amber-500 to-yellow-300',
+      barClass: 'bg-gradient-to-t from-yellow-200 via-yellow-400 to-amber-600',
       legendTitle: 'Thang màu Nắng & Bức xạ mặt trời (MJ/m²/ngày):',
       swatches: [
-        { colorClass: 'bg-yellow-300', label: 'Trời nhiều mây / Nắng dịu (< 14)' },
-        { colorClass: 'bg-amber-500', label: 'Nắng tốt quang hợp (14 – 19)' },
-        { colorClass: 'bg-orange-600', label: 'Bức xạ gắt / Bốc hơi mạnh (> 19)' },
+        { colorClass: 'bg-yellow-200 border border-amber-300', label: 'Nhiều mây / Nắng dịu (< 14)' },
+        { colorClass: 'bg-yellow-400', label: 'Nắng tốt quang hợp (14 – 19)' },
+        { colorClass: 'bg-amber-600', label: 'Bức xạ gắt / Bốc hơi mạnh (> 19)' },
       ],
     },
   };
@@ -289,11 +289,11 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
           const Icon = meta.icon;
           const isSelected = selectedIndicator === meta.code;
           const tabColorMap: Record<string, string> = {
-            T2M: 'bg-rose-700 border-rose-700',
+            T2M: 'bg-red-700 border-red-700',
             PRECTOTCORR: 'bg-blue-700 border-blue-700',
             GWETROOT: 'bg-emerald-800 border-emerald-800',
-            RH2M: 'bg-indigo-700 border-indigo-700',
-            ALLSKY_SFC_SW_DWN: 'bg-orange-600 border-orange-600',
+            RH2M: 'bg-purple-700 border-purple-700',
+            ALLSKY_SFC_SW_DWN: 'bg-amber-600 border-amber-600',
           };
           return (
             <button
@@ -353,7 +353,7 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3 py-2 bg-stone-50/70 rounded-xl border border-stone-200/70 text-[11px] text-stone-600">
           <span className="font-bold text-stone-800">Phân biệt màu giữa các chỉ số:</span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-600 inline-block" /> Đỏ/Cam: Nhiệt độ
+            <span className="w-2.5 h-2.5 rounded-full bg-red-600 inline-block" /> Đỏ cam: Nhiệt độ
           </span>
           <span className="inline-flex items-center gap-1">
             <span className="w-2.5 h-2.5 rounded-full bg-blue-600 inline-block" /> Xanh dương: Lượng mưa
@@ -362,10 +362,10 @@ export const NasaAnalyticsView: React.FC<NasaAnalyticsViewProps> = ({
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block" /> Xanh lá: Ẩm đất vùng rễ
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 inline-block" /> Tím chàm: Ẩm không khí
+            <span className="w-2.5 h-2.5 rounded-full bg-purple-600 inline-block" /> Tím: Ẩm không khí
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" /> Vàng cam: Nắng &amp; Bức xạ
+            <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 border border-amber-400 inline-block" /> Vàng nắng: Nắng &amp; Bức xạ
           </span>
         </div>
 

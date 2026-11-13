@@ -113,7 +113,7 @@ export const GeminiService = {
     field: FieldProfile,
     conversationHistory: Array<{ role: 'user' | 'model'; parts: string }>,
     weather?: WeatherObservation
-  ): Promise<{ reply: string; isError?: boolean }> {
+  ): Promise<{ reply: string; isError?: boolean; fromFallback?: boolean }> {
     try {
       const response = await fetch('/api/gemini/chat', {
         method: 'POST',
@@ -128,7 +128,11 @@ export const GeminiService = {
 
       const data = await response.json().catch(() => null);
       if (data?.reply) {
-        return { reply: data.reply, isError: !data.success };
+        return {
+          reply: data.reply,
+          isError: !data.success,
+          fromFallback: !!data.fromFallback,
+        };
       }
 
       if (!response.ok) {

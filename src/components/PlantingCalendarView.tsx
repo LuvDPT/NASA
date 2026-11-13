@@ -137,28 +137,44 @@ export const PlantingCalendarView: React.FC<PlantingCalendarViewProps> = ({ acti
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
           {evaluations.map(ev => {
             const isSelected = selectedDetail?.month === ev.month;
+            const statusCardCls =
+              ev.status === 'optimal'
+                ? 'bg-emerald-50/70 border-emerald-200 hover:border-emerald-400'
+                : ev.status === 'caution'
+                ? 'bg-amber-50/70 border-amber-200 hover:border-amber-400'
+                : ev.status === 'risk'
+                ? 'bg-rose-50/70 border-rose-200 hover:border-rose-400'
+                : 'bg-stone-50 border-stone-200';
+            const statusIconBg =
+              ev.status === 'optimal'
+                ? 'bg-emerald-100'
+                : ev.status === 'caution'
+                ? 'bg-amber-100'
+                : ev.status === 'risk'
+                ? 'bg-rose-100'
+                : 'bg-stone-100';
             return (
               <button
                 key={ev.month}
                 onClick={() => setSelectedDetail(ev)}
-                className={`p-3.5 rounded-xl border text-center transition cursor-pointer flex flex-col items-center justify-between h-32 ${
+                className={`p-3.5 rounded-xl border text-center transition cursor-pointer flex flex-col items-center justify-between h-32 ${statusCardCls} ${
                   isSelected
-                    ? 'border-emerald-600 ring-2 ring-emerald-600/30 bg-emerald-50/50 shadow-md'
-                    : 'border-stone-200 hover:border-stone-300 bg-white hover:bg-stone-50/60 shadow-2xs'
+                    ? 'ring-2 ring-emerald-700 shadow-md'
+                    : 'shadow-2xs'
                 }`}
               >
-                <div className="text-xs font-bold text-stone-500">Tháng {ev.month}</div>
-                <div className="w-10 h-10 rounded-full flex items-center justify-center my-1 bg-stone-100">
+                <div className="text-xs font-bold text-stone-700">Tháng {ev.month}</div>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center my-1 ${statusIconBg}`}>
                   {getStatusIcon(ev.status)}
                 </div>
-                <div className="text-[11px] font-semibold text-stone-800">
+                <div className="text-[11px] font-bold text-stone-900">
                   {ev.status === 'optimal'
                     ? 'Thuận lợi'
                     : ev.status === 'caution'
                     ? 'Cần theo dõi'
                     : 'Rủi ro cao'}
                 </div>
-                <div className="text-[10px] text-stone-400">
+                <div className="text-[10px] text-stone-500">
                   {ev.adverseYearsCount}/21 năm bất lợi
                 </div>
               </button>

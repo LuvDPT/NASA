@@ -228,20 +228,85 @@ export const AdminDataManagementView: React.FC<AdminDataManagementViewProps> = (
     try {
       setLoading(true);
       const headers = await getAdminHeaders();
-      const [resStatus, resLogs] = await Promise.all([
+      const [resStatus, resLogs, fsDatasets, fsSyncLogs] = await Promise.all([
         fetch('/api/admin/status', { headers }),
         fetch('/api/admin/sync-logs', { headers }),
+        FirestoreService.getAdminNasaDatasets(),
+        FirestoreService.getAdminSyncLogs(),
       ]);
 
-      if (resStatus.ok) {
-        const data = await resStatus.json();
-        setStatus(data);
-      }
+      const serverStatus: CentralDataStatus | null = resStatus.ok ? await resStatus.json() : null;
+      const serverLogsJson = resLogs.ok ? await resLogs.json() : { logs: [], imports: [] };
 
-      if (resLogs.ok) {
-        const data = await resLogs.json();
-        setSyncLogs(data.logs || []);
-        setImports(data.imports || []);
+      // Merge sync logs (server + persisted Firestore logs)
+      const serverLogs: SyncLogRecord[] = serverLogsJson.logs || [];
+      const mergedLogsMap = new Map<string, SyncLogRecord>();
+      for (const l of serverLogs) mergedLogsMap.set(l.id, l);
+      for (const fl of fsSyncLogs) {
+        const dup = Array.from(mergedLogsMap.values()).some(
+          (existing) =>
+            existing.syncType === fl.syncType &&
+            existing.recordsSynced === fl.recordsSynced &&
+            Math.abs(new Date(existing.startTime).getTime() - new Date(fl.startTime).getTime()) < 15000
+        );
+        if (!dup) {
+          mergedLogsMap.set(fl.id, {
+            id: fl.id,
+            syncType: fl.syncType as any,
+            targetCellsCount: fl.targetCellsCount,
+            recordsSynced: fl.recordsSynced,
+            startTime: fl.startTime,
+            endTime: fl.endTime,
+            status: fl.status,
+            latestNasaDate: fl.latestNasaDate,
+          });
+        }
+      }
+      const mergedLogs = Array.from(mergedLogsMap.values()).sort((a, b) =>
+        b.startTime.localeCompare(a.startTime)
+      );
+      setSyncLogs(mergedLogs);
+
+      // Merge data imports (server + persisted Firestore nasa_datasets)
+      const serverImports: DataImportRecord[] = serverLogsJson.imports || [];
+      const mergedImportsByVer = new Map<string, DataImportRecord>();
+      for (const imp of serverImports) mergedImportsByVer.set(imp.version, imp);
+      let fsExtraRecords = 0;
+      for (const ds of fsDatasets) {
+        if (!mergedImportsByVer.has(ds.version)) {
+          fsExtraRecords += Number(ds.recordCount) || 0;
+          const createdIso = ds.createdAt?.toDate?.()?.toISOString() || new Date().toISOString();
+          mergedImportsByVer.set(ds.version, {
+            id: ds.id,
+            fileName: ds.fileName,
+            fileSizeBytes: 0,
+            storagePath: `firestore/nasa_datasets/${ds.id}`,
+            recordCount: ds.recordCount,
+            cellCount: ds.cellCount,
+            startDate: ds.startDate,
+            endDate: ds.endDate,
+            status: ds.status,
+            version: ds.version,
+            importedBy: ds.uploadedBy || 'admin',
+            createdAt: createdIso,
+          });
+        }
+      }
+      const mergedImports = Array.from(mergedImportsByVer.values()).sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt)
+      );
+      setImports(mergedImports);
+
+      if (serverStatus) {
+        const latestCompletedFs = fsDatasets.find((d) => d.status === 'COMPLETED');
+        setStatus({
+          ...serverStatus,
+          totalRecords: serverStatus.totalRecords + fsExtraRecords,
+          activeVersion:
+            serverStatus.activeVersion === 'v2026.11-daily' && latestCompletedFs
+              ? latestCompletedFs.version
+              : serverStatus.activeVersion,
+        });
       }
     } catch (err) {
       console.error('Failed to fetch admin data', err);

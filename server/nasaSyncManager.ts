@@ -1,6 +1,11 @@
+import fs from 'fs';
+import path from 'path';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { ALL_NASA_CELLS, findNearestNasaGrid } from '../src/data/nasaVietnamGrid.ts';
 import { CentralDataStatus, DataImportRecord, SyncLogRecord, CsvPreviewResult } from '../src/types/index.ts';
+
+const WAREHOUSE_DIR = path.resolve(process.cwd(), '.data');
+const WAREHOUSE_FILE = path.join(WAREHOUSE_DIR, 'nasa_warehouse.json');
 
 // Environment variables
 const supabaseUrl = process.env.SUPABASE_URL || '';
@@ -63,6 +68,55 @@ let inMemorySyncLogs: SyncLogRecord[] = [
 
 let autoSyncEnabled = true;
 let currentActiveVersion = 'v2026.11-daily';
+let cumulativeImportedRecords = 0;
+
+function loadWarehouseFromDisk() {
+  try {
+    if (!fs.existsSync(WAREHOUSE_FILE)) return;
+    const raw = fs.readFileSync(WAREHOUSE_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed.imports) && parsed.imports.length > 0) {
+      inMemoryImports = parsed.imports;
+    }
+    if (Array.isArray(parsed.syncLogs) && parsed.syncLogs.length > 0) {
+      inMemorySyncLogs = parsed.syncLogs;
+    }
+    if (Array.isArray(parsed.dailyData)) {
+      inMemoryDailyData = parsed.dailyData;
+    }
+    if (typeof parsed.autoSyncEnabled === 'boolean') {
+      autoSyncEnabled = parsed.autoSyncEnabled;
+    }
+    if (typeof parsed.currentActiveVersion === 'string' && parsed.currentActiveVersion) {
+      currentActiveVersion = parsed.currentActiveVersion;
+    }
+    if (typeof parsed.cumulativeImportedRecords === 'number') {
+      cumulativeImportedRecords = parsed.cumulativeImportedRecords;
+    }
+  } catch (err) {
+    console.warn('[Warehouse] Could not load persisted NASA warehouse:', err);
+  }
+}
+
+function persistWarehouseToDisk() {
+  try {
+    fs.mkdirSync(WAREHOUSE_DIR, { recursive: true });
+    const snapshot = {
+      autoSyncEnabled,
+      currentActiveVersion,
+      cumulativeImportedRecords,
+      imports: inMemoryImports.slice(0, 120),
+      syncLogs: inMemorySyncLogs.slice(0, 120),
+      dailyData: inMemoryDailyData.slice(-25000),
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(WAREHOUSE_FILE, JSON.stringify(snapshot), 'utf-8');
+  } catch (err) {
+    console.warn('[Warehouse] Could not save persisted NASA warehouse:', err);
+  }
+}
+
+loadWarehouseFromDisk();
 
 /**
  * Calculates the latest available date from NASA POWER Daily API.
@@ -83,7 +137,7 @@ export async function getCentralDataStatus(): Promise<CentralDataStatus> {
   const latestDate = getCalculatedLatestNasaDate();
   const lastSync = inMemorySyncLogs[0]?.endTime || inMemorySyncLogs[0]?.startTime || new Date().toISOString();
 
-  let totalRecords = 531 * 365 * 8 + inMemoryDailyData.length;
+  let totalRecords = 531 * 365 * 8 + Math.max(inMemoryDailyData.length, cumulativeImportedRecords);
 
   if (supabase) {
     try {
@@ -251,6 +305,8 @@ export async function executeNasaPowerSync(cellIds?: string[]): Promise<SyncLogR
       message: `Đồng bộ thành công ${syncedCount} bản ghi NASA POWER cho ${targetCells.length} ô lưới.`,
       dateCoverage: `${startStr} -> ${endStr}`,
     };
+    cumulativeImportedRecords += syncedCount;
+    persistWarehouseToDisk();
 
     if (supabase) {
       await supabase.from('sync_logs').insert({
@@ -270,6 +326,7 @@ export async function executeNasaPowerSync(cellIds?: string[]): Promise<SyncLogR
     newLog.status = 'FAILED';
     newLog.endTime = new Date().toISOString();
     newLog.errorMessage = error.message || 'Lỗi khi gọi NASA POWER API';
+    persistWarehouseToDisk();
     return newLog;
   }
 }
@@ -694,6 +751,8 @@ export async function commitImportedData(preview: CsvPreviewResult, rawContent: 
 
   inMemoryImports.unshift(importRecord);
   currentActiveVersion = version;
+  cumulativeImportedRecords += preview.validRows;
+  persistWarehouseToDisk();
 
   // Supabase Storage upload if client available
   if (supabase) {
@@ -734,14 +793,16 @@ export async function commitBatchCsvFiles(files: BatchCsvFileInput[]): Promise<{
   const version = `v${Date.now()}`;
   let totalBytes = 0;
 
+  const incomingMap = new Map<string, DailyRecord>();
+  for (const existing of inMemoryDailyData) {
+    incomingMap.set(`${existing.cellId}_${existing.date}_${existing.indicatorCode}`, existing);
+  }
+
   for (const f of files) {
     totalBytes += f.content.length;
     const parsed = parseSingleCsvToRows(f.fileName, f.content);
     for (const dp of parsed.rows) {
-      inMemoryDailyData = inMemoryDailyData.filter(
-        (r) => !(r.cellId === dp.cell_id && r.date === dp.date && r.indicatorCode === dp.indicator_code)
-      );
-      inMemoryDailyData.push({
+      incomingMap.set(`${dp.cell_id}_${dp.date}_${dp.indicator_code}`, {
         cellId: dp.cell_id,
         date: dp.date,
         indicatorCode: dp.indicator_code,
@@ -751,6 +812,7 @@ export async function commitBatchCsvFiles(files: BatchCsvFileInput[]): Promise<{
       });
     }
   }
+  inMemoryDailyData = Array.from(incomingMap.values()).slice(-25000);
 
   const importRecord: DataImportRecord = {
     id: `imp-batch-${Date.now()}`,
@@ -769,6 +831,7 @@ export async function commitBatchCsvFiles(files: BatchCsvFileInput[]): Promise<{
 
   inMemoryImports.unshift(importRecord);
   currentActiveVersion = version;
+  cumulativeImportedRecords += batch.preview.validRows;
 
   inMemorySyncLogs.unshift({
     id: `sync-batch-${Date.now()}`,
@@ -784,6 +847,7 @@ export async function commitBatchCsvFiles(files: BatchCsvFileInput[]): Promise<{
     },
   });
 
+  persistWarehouseToDisk();
   return { importRecord, batchSummary: batch };
 }
 
@@ -805,6 +869,7 @@ export function rollbackDataVersion(targetVersion: string): { success: boolean; 
   });
 
   currentActiveVersion = targetVersion;
+  persistWarehouseToDisk();
   return {
     success: true,
     message: `Đã khôi phục thành công kho dữ liệu NASA về phiên bản ${targetVersion} (${found.fileName}).`,
@@ -816,6 +881,7 @@ export function rollbackDataVersion(targetVersion: string): { success: boolean; 
  */
 export function toggleAutoSync(enabled: boolean): boolean {
   autoSyncEnabled = enabled;
+  persistWarehouseToDisk();
   return autoSyncEnabled;
 }
 

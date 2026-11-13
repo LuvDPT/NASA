@@ -441,11 +441,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div>
               <div className="flex justify-between text-xs mb-1">
                 <span className="font-semibold text-stone-700">Độ ẩm tầng mặt (0–5 cm):</span>
-                <span className="font-bold text-blue-700 tabular-nums">{(weather.gwettop * 100).toFixed(0)}%</span>
+                <span className="font-bold text-sky-700 tabular-nums">{(weather.gwettop * 100).toFixed(0)}%</span>
               </div>
               <div className="w-full bg-stone-200 rounded-full h-3 overflow-hidden p-0.5">
                 <div
-                  className="bg-blue-500 h-2 rounded-full transition-all duration-500"
+                  className="bg-sky-500 h-2 rounded-full transition-all duration-500"
                   style={{ width: `${Math.min(100, Math.max(5, weather.gwettop * 100))}%` }}
                 />
               </div>
@@ -483,7 +483,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </span>
           </div>
 
-          {/* Radial / Gauge Mockup */}
+          {/* Radial / Gauge */}
           <div className="flex items-center justify-center py-2">
             <div className="relative w-32 h-32 flex items-center justify-center">
               <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
@@ -499,7 +499,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   cx="50"
                   cy="50"
                   r="40"
-                  stroke={healthScore > 85 ? '#10b981' : '#f59e0b'}
+                  stroke={healthScore > 85 ? '#0d9488' : healthScore >= 75 ? '#d97706' : '#dc2626'}
                   strokeWidth="8"
                   strokeDasharray="251.2"
                   strokeDashoffset={251.2 - (251.2 * healthScore) / 100}

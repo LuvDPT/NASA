@@ -65,7 +65,7 @@ export const RotationExplorerView: React.FC<RotationExplorerViewProps> = ({
     equipmentAccess: 'basic_manual',
     marketPreference: 'mixed_family',
   });
-  const [glossaryOpen, setGlossaryOpen] = useState(true);
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
 
   // Single Best Strategy & AI Rethink State
   const [customBestStrategy, setCustomBestStrategy] = useState<RotationStrategy | null>(null);
@@ -351,7 +351,7 @@ export const RotationExplorerView: React.FC<RotationExplorerViewProps> = ({
               <span className="w-3 h-3 rounded bg-amber-400 inline-block" /> Chuyển vụ
             </span>
             <span className="flex items-center gap-1">
-              <span className="w-3 h-3 rounded bg-stone-300 inline-block" /> Đất trống (dễ xói mòn/bốc hơi)
+              <span className="w-3 h-3 rounded bg-rose-400 inline-block" /> Đất trống (dễ xói mòn/bốc hơi)
             </span>
           </div>
         </div>
@@ -363,7 +363,7 @@ export const RotationExplorerView: React.FC<RotationExplorerViewProps> = ({
                 ? 'border-emerald-200 bg-emerald-50/40'
                 : m.fieldState === 'harvest_transition'
                 ? 'border-amber-200 bg-amber-50/40'
-                : 'border-stone-300 bg-stone-100/70';
+                : 'border-rose-200 bg-rose-50/40';
 
             const stateLabel =
               m.fieldState === 'active_crop'

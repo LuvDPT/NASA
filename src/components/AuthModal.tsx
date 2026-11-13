@@ -146,9 +146,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           </div>
 
           {error && (
-            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <span>{error}</span>
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+              {(error.includes('Email/Password') || error.includes('Google')) && (
+                <button
+                  type="button"
+                  onClick={handleGoogleClick}
+                  disabled={googleLoading}
+                  className="w-full py-2 px-3 bg-white hover:bg-stone-50 border border-rose-300 text-stone-900 font-bold rounded-lg text-xs transition flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <span className="w-4 h-4 rounded-full bg-amber-500 text-white text-[10px] font-black flex items-center justify-center">
+                    G
+                  </span>
+                  Đăng nhập nhanh bằng Google
+                </button>
+              )}
             </div>
           )}
 
@@ -245,14 +260,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
           <div className="p-3 bg-stone-50 border border-stone-200 rounded-xl text-[11px] text-stone-600 flex items-start gap-2 leading-relaxed">
             <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-            <div className="space-y-1">
-              <p>
-                Dữ liệu thửa ruộng của mỗi tài khoản được bảo vệ riêng tư — chỉ người tạo ruộng hoặc người được bạn chia sẻ (bằng đường dẫn hoặc email) mới xem được.
-              </p>
-              <p className="text-emerald-900 font-medium">
-                <strong>Đăng nhập Quản trị viên (Admin):</strong> Bấm <strong>Tiếp tục với tài khoản Google</strong> bằng email quản trị (<code>fss01211cg@gmail.com</code> hoặc tài khoản đã được cấp quyền) để mở mục <strong>Quản trị Hệ thống</strong>.
-              </p>
-            </div>
+            <p>
+              Dữ liệu thửa ruộng của mỗi tài khoản được bảo vệ riêng tư — chỉ người tạo ruộng hoặc người được bạn chia sẻ (bằng đường dẫn hoặc email) mới xem được.
+            </p>
           </div>
         </div>
       </div>

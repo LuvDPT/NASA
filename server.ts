@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 dotenv.config();
 
@@ -95,28 +95,119 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-async function withGeminiRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
-  let lastError: any;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      lastError = err;
-      const msg = String(err?.message || '').toLowerCase();
-      const status = err?.status || err?.code;
-      const isNonRetryable =
-        status === 400 ||
-        status === 401 ||
-        status === 403 ||
-        msg.includes('api_key_invalid') ||
-        msg.includes('permission_denied');
-      if (isNonRetryable || attempt === maxAttempts) {
-        throw err;
-      }
-      await new Promise((r) => setTimeout(r, 450 * attempt));
+function isRateLimitError(err: any): boolean {
+  const status = err?.status || err?.code;
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    status === 429 ||
+    msg.includes('429') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit')
+  );
+}
+
+async function withGeminiFallback<T>(
+  primaryFn: () => Promise<T>,
+  liteFn: () => Promise<T>
+): Promise<{ result: T; modelUsed: string }> {
+  try {
+    const result = await primaryFn();
+    return { result, modelUsed: 'gemini-4-hydrogen' };
+  } catch (err: any) {
+    const status = err?.status || err?.code;
+    const msg = String(err?.message || '').toLowerCase();
+    const isAuthOrBadKey =
+      status === 400 ||
+      status === 401 ||
+      status === 403 ||
+      msg.includes('api_key_invalid') ||
+      msg.includes('permission_denied');
+    if (isAuthOrBadKey) {
+      throw err;
     }
+    // Fall back ONCE to lighter/faster model on 429 or transient error (never hammer same endpoint)
+    const result = await liteFn();
+    return { result, modelUsed: 'gemini-3.1-flash-lite' };
   }
-  throw lastError;
+}
+
+const chatResponseCache = new Map<string, { reply: string; expiresAt: number }>();
+
+function buildLocalAgronomyReply(
+  userMessage: string,
+  field: any,
+  weather: any
+): string {
+  const q = userMessage.toLowerCase();
+  const fieldName = field?.name || 'thửa ruộng của bạn';
+  const cropName = field?.crop?.name || 'cây trồng hiện tại';
+  const stageName = field?.crop?.currentStage || 'đang sinh trưởng';
+  const soilLabel = String(field?.soilType || 'loam');
+  const drainage = field?.soilCharacteristics?.drainage || 'moderate';
+  const temp = Number(weather?.temp ?? 26);
+  const humidity = Number(weather?.humidity ?? 80);
+  const rain = Number(weather?.rain ?? 0);
+  const rootPct = Math.round(Number(weather?.gwetroot ?? 0.6) * 100);
+  const topPct = Math.round(Number(weather?.gwettop ?? 0.55) * 100);
+  const histAvgTemp = Number(weather?.historicalBaseline?.avgTemp ?? 26);
+  const histAvgRain = Number(weather?.historicalBaseline?.avgRain ?? 120);
+
+  if (q.includes('tưới') || q.includes('đất') || q.includes('ẩm') || q.includes('nước')) {
+    const shouldWater = rootPct < 45 && rain < 3;
+    const tooWet = rootPct > 78 || rain >= 10;
+    return [
+      `• **Đánh giá tưới cho "${fieldName}" (${cropName} — ${stageName}):**`,
+      `• Độ ẩm vùng rễ hiện khoảng **${rootPct}%** (tầng mặt **${topPct}%**), lượng mưa ghi nhận **${rain} mm**.`,
+      tooWet
+        ? `• **Khuyến nghị: TẠM HOÃN TƯỚI** và ưu tiên khơi thông rãnh thoát nước, vì vùng rễ đã đủ/dư ẩm (${rootPct}%), nhất là khi đất thoát nước ${drainage === 'slow' ? 'chậm (dễ bí rễ)' : 'vừa'}.`
+        : shouldWater
+        ? `• **Khuyến nghị: NÊN TƯỚI BỔ SUNG NHẸ** vào sáng sớm hoặc chiều mát (đất ${soilLabel} thoát ${drainage === 'fast' ? 'nhanh, chia 2 lần tưới ngắn' : 'vừa phải'}).`
+        : `• **Khuyến nghị: CHƯA CẦN TƯỚI THÊM**, giữ ẩm hiện tại và kiểm tra lại đất tầng 0–5 cm vào sáng mai.`,
+    ].join('\n');
+  }
+
+  if (q.includes('nấm') || q.includes('bệnh') || q.includes('sâu') || q.includes('nhiệt độ')) {
+    const highFungalRisk = humidity >= 83 || (temp <= 22 && humidity >= 80);
+    return [
+      `• **Đánh giá nguy cơ sâu bệnh tại "${fieldName}" (${cropName}):**`,
+      `• Hiện tại nhiệt độ **${temp}°C**, độ ẩm không khí **${humidity}%**, mưa **${rain} mm**.`,
+      highFungalRisk
+        ? `• **Cảnh báo mức Trung bình–Cao:** Độ ẩm không khí trên **83%** tạo màng sương ẩm trên lá, dễ phát sinh nấm hại (đạo ôn/khô vằn trên lúa, sương mai/thán thư trên rau màu). Nên kiểm tra mặt dưới lá vào sáng sớm và tỉa lá già cho thoáng gốc.`
+        : `• **Mức độ hiện tại Thấp–Trung bình:** Không khí tương đối thông thoáng (${humidity}%). Duy trì thăm đồng 2–3 ngày/lần và tránh bón thừa đạm vào ngày âm u.`,
+    ].join('\n');
+  }
+
+  if (q.includes('bón') || q.includes('phân') || q.includes('đạm') || q.includes('kali')) {
+    const badForFert = rain > 12 || topPct > 85 || temp >= 35;
+    return [
+      `• **Thời điểm bón phân cho "${fieldName}" (${cropName} — giai đoạn ${stageName}):**`,
+      badForFert
+        ? `• **Chưa nên bón ngay hôm nay** vì mưa (${rain} mm) hoặc đất tầng mặt quá bão hòa (${topPct}%) dễ rửa trôi phân bón.`
+        : `• **Có thể bón thúc nhẹ vào sáng sớm (06:00–08:30) hoặc chiều mát (sau 16:00)** khi trời không mưa to, độ ẩm rễ đang ở mức **${rootPct}%** giúp rễ hấp thu ổn định.`,
+      `• Chia nhỏ lượng phân (đặc biệt với đất thoát nhanh), ưu tiên kết hợp phân hữu cơ hoai mục hoặc lân/kali theo đúng giai đoạn sinh trưởng.`,
+    ].join('\n');
+  }
+
+  if (q.includes('21 năm') || q.includes('rét') || q.includes('hạn') || q.includes('lịch sử') || q.includes('khí hậu')) {
+    const diff = (temp - histAvgTemp).toFixed(1);
+    return [
+      `• **Đối chiếu chuỗi khí hậu NASA 21 năm (2005–2025) tại khu vực "${fieldName}":**`,
+      `• Nhiệt độ trung bình lịch sử cùng kỳ là **${histAvgTemp}°C**, hiện tại **${temp}°C** (${Number(diff) >= 0 ? `+${diff}` : diff}°C so với nền 21 năm); lượng mưa nền khoảng **${histAvgRain} mm/tháng**.`,
+      temp < 19
+        ? `• Vùng này có nguy cơ gặp **đợt rét đậm/lạnh ẩm**, bà con cần giữ mực nước nông (với lúa) hoặc tủ gốc/che phủ hữu cơ cho rau màu.`
+        : rootPct < 45
+        ? `• Giai đoạn này dễ hụt ẩm nhẹ nếu mưa xuống muộn; nên áp dụng che phủ rơm rạ/tưới tiết kiệm và cân nhắc luân canh cây họ Đậu sau vụ này để giữ ẩm đất.`
+        : `• Nhiệt độ và độ ẩm đang nằm gần ngưỡng trung bình nhiều năm; tiếp tục theo dõi mưa/nắng theo từng tuần để điều chỉnh lịch tưới và luân canh phù hợp.`,
+    ].join('\n');
+  }
+
+  return [
+    `• **Tư vấn nhanh cho "${fieldName}" (${cropName} — ${stageName}):**`,
+    `• Thông số hiện tại: Nhiệt độ **${temp}°C**, mưa **${rain} mm**, ẩm không khí **${humidity}%**, ẩm vùng rễ **${rootPct}%**.`,
+    `• ${rootPct > 78 ? 'Đất đang khá ẩm, ưu tiên thoát nước đầu bờ và tạm hoãn tưới.' : rootPct < 42 ? 'Đất hơi khô, kiểm tra độ ẩm 0–5 cm để tưới bổ sung vào chiều mát.' : 'Độ ẩm đất tương đối cân bằng, duy trì chăm sóc và theo dõi mặt dưới lá.'}`,
+    `• Bác có thể mở thêm mục **Lịch gieo trồng** hoặc **Luân canh tối ưu** để xem bảng chi tiết 12 tháng cho thửa ruộng này.`,
+  ].join('\n');
 }
 
 function extractGeminiText(response: any): string {
@@ -236,15 +327,29 @@ Yêu cầu xuất ra định dạng JSON chính xác:
 }
 `;
 
-    const response = await withGeminiRetry(() =>
-      ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: prompt,
-        config: {
-          systemInstruction: 'Bạn là chuyên gia nông học Việt Nam thuộc hệ thống CropCast. Trả lời thuần định dạng JSON chuẩn. Không dùng markdown code fences.',
-          responseMimeType: 'application/json',
-        },
-      })
+    const { result: response, modelUsed } = await withGeminiFallback(
+      () =>
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'Bạn là chuyên gia nông học Việt Nam thuộc hệ thống CropCast. Trả lời thuần định dạng JSON chuẩn. Không dùng markdown code fences.',
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+      () =>
+        ai.models.generateContent({
+          model: 'gemini-3.1-flash-lite',
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'Bạn là chuyên gia nông học Việt Nam thuộc hệ thống CropCast. Trả lời thuần định dạng JSON chuẩn. Không dùng markdown code fences.',
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          },
+        })
     );
 
     const text = extractGeminiText(response) || '{}';
@@ -259,7 +364,7 @@ Yêu cầu xuất ra định dạng JSON chính xác:
     res.json({
       success: true,
       advice: parsedData,
-      source: 'gemini-4-hydrogen',
+      source: modelUsed,
     });
   } catch (error: any) {
     console.error('Gemini Advisor Error:', error);
@@ -336,16 +441,29 @@ Hãy trả về ĐÚNG 1 JSON Object theo cấu trúc sau (bằng tiếng Việt
 }
 `;
 
-    const response = await withGeminiRetry(() =>
-      ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: prompt,
-        config: {
-          systemInstruction:
-            'Bạn là chuyên gia quy hoạch luân canh nông nghiệp CropCast. Trả về đúng JSON hợp lệ, không markdown.',
-          responseMimeType: 'application/json',
-        },
-      })
+    const { result: response, modelUsed } = await withGeminiFallback(
+      () =>
+        ai.models.generateContent({
+          model: 'gemini-4-hydrogen',
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'Bạn là chuyên gia quy hoạch luân canh nông nghiệp CropCast. Trả về đúng JSON hợp lệ, không markdown.',
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          },
+        }),
+      () =>
+        ai.models.generateContent({
+          model: 'gemini-3.1-flash-lite',
+          contents: prompt,
+          config: {
+            systemInstruction:
+              'Bạn là chuyên gia quy hoạch luân canh nông nghiệp CropCast. Trả về đúng JSON hợp lệ, không markdown.',
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL },
+          },
+        })
     );
 
     const text = extractGeminiText(response) || '{}';
@@ -364,7 +482,7 @@ Hãy trả về ĐÚNG 1 JSON Object theo cấu trúc sau (bằng tiếng Việt
 
     res.json({
       success: true,
-      source: 'gemini-4-hydrogen',
+      source: modelUsed,
       strategy: {
         id: `rot-ai-${Date.now()}`,
         isCurrentBaseline: false,
@@ -399,18 +517,26 @@ Hãy trả về ĐÚNG 1 JSON Object theo cấu trúc sau (bằng tiếng Việt
 
 // Gemini Q&A Chat endpoint
 app.post('/api/gemini/chat', async (req: Request, res: Response) => {
+  const { message, field, weather, conversationHistory } = req.body;
+  const userMessage = typeof message === 'string' ? message.trim() : '';
+  const promptText = userMessage || 'Xin chào, ruộng của tôi hôm nay cần chú ý gì?';
+
   try {
-    const { message, field, weather, conversationHistory } = req.body;
-    const userMessage = typeof message === 'string' ? message.trim() : '';
+    const cacheKey = `${field?.id || 'anon'}::${field?.soilType || ''}::${field?.crop?.name || ''}::${promptText.toLowerCase()}`;
+    const isShortTurn = !Array.isArray(conversationHistory) || conversationHistory.length <= 2;
+    if (isShortTurn) {
+      const cached = chatResponseCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json({ success: true, reply: cached.reply, cached: true });
+      }
+    }
 
     const ai = getGeminiClient();
     if (!ai) {
       return res.status(200).json({
-        success: false,
-        fallback: true,
-        errorCode: 'MISSING_API_KEY',
-        reply:
-          'Trợ lý AI hiện chưa được gắn khóa kết nối GEMINI_API_KEY trên máy chủ. Bạn vẫn có thể xem khuyến nghị tự động theo dữ liệu khí hậu ở mục Tổng quan và Luân canh & Đất.',
+        success: true,
+        fromFallback: true,
+        reply: buildLocalAgronomyReply(promptText, field, weather),
       });
     }
 
@@ -446,12 +572,11 @@ Nguyên tắc trả lời:
     // Format valid alternating history starting from the first user turn
     const sanitizedHistory: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
     if (Array.isArray(conversationHistory)) {
-      const recent = conversationHistory.slice(-8);
+      const recent = conversationHistory.slice(-6);
       for (const item of recent) {
         const text = typeof item?.parts === 'string' ? item.parts.trim() : '';
         if (!text) continue;
         const role = item.role === 'user' ? 'user' : 'model';
-        // Gemini chat history MUST start with 'user' and alternate roles cleanly
         if (sanitizedHistory.length === 0 && role !== 'user') continue;
         const lastRole = sanitizedHistory[sanitizedHistory.length - 1]?.role;
         if (lastRole === role) {
@@ -460,62 +585,66 @@ Nguyên tắc trả lời:
           sanitizedHistory.push({ role, parts: [{ text }] });
         }
       }
-      // Ensure history ends on 'model' before calling sendMessage (or drop trailing user)
       if (sanitizedHistory.length > 0 && sanitizedHistory[sanitizedHistory.length - 1].role === 'user') {
         sanitizedHistory.pop();
       }
     }
 
-    const promptText = userMessage || 'Xin chào, ruộng của tôi hôm nay cần chú ý gì?';
+    const callModel = async (model: string, thinkingLevel: ThinkingLevel) => {
+      if (sanitizedHistory.length > 0) {
+        const chat = ai.chats.create({
+          model,
+          history: sanitizedHistory,
+          config: {
+            systemInstruction: systemPrompt,
+            thinkingConfig: { thinkingLevel },
+          },
+        });
+        const response = await chat.sendMessage({ message: promptText });
+        const extracted = extractGeminiText(response);
+        if (extracted) return extracted;
+      }
 
-    const replyText = await withGeminiRetry(async () => {
-      const chat = ai.chats.create({
-        model: 'gemini-4-hydrogen',
-        history: sanitizedHistory,
-        config: {
-          systemInstruction: systemPrompt,
-        },
-      });
-
-      const response = await chat.sendMessage({
-        message: promptText,
-      });
-      const extracted = extractGeminiText(response);
-      if (extracted) return extracted;
-
-      // Fallback single-turn generateContent if chat response returned empty
       const directRes = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
+        model,
         contents: promptText,
         config: {
           systemInstruction: systemPrompt,
+          thinkingConfig: { thinkingLevel },
         },
       });
       const directText = extractGeminiText(directRes);
-      if (!directText) {
-        throw new Error('EMPTY_MODEL_RESPONSE');
-      }
+      if (!directText) throw new Error('EMPTY_MODEL_RESPONSE');
       return directText;
-    }, 3);
+    };
+
+    const { result: replyText } = await withGeminiFallback(
+      () => callModel('gemini-4-hydrogen', ThinkingLevel.LOW),
+      () => callModel('gemini-3.1-flash-lite', ThinkingLevel.MINIMAL)
+    );
+
+    if (isShortTurn) {
+      chatResponseCache.set(cacheKey, {
+        reply: replyText,
+        expiresAt: Date.now() + 2 * 60 * 1000,
+      });
+    }
 
     res.json({
       success: true,
       reply: replyText,
     });
   } catch (error: any) {
-    console.error('Gemini Chat Error:', error?.status || error?.code, error?.message || error);
-    const status = error?.status || error?.code;
-    const msg = String(error?.message || '').toLowerCase();
-    let userFriendlyError = 'Máy chủ AI đang bận hoặc tạm gián đoạn kết nối. Vui lòng thử gửi lại sau vài giây.';
-    if (status === 429 || msg.includes('resource_exhausted') || msg.includes('quota')) {
-      userFriendlyError = 'Hệ thống AI đang quá tải lượt hỏi tạm thời (vượt hạn mức phút). Vui lòng đợi 10–15 giây rồi hỏi lại.';
-    } else if (status === 400 || status === 403 || msg.includes('api_key')) {
-      userFriendlyError = 'Khóa kết nối Gemini AI chưa hợp lệ hoặc đã hết hạn. Quản trị viên cần kiểm tra lại GEMINI_API_KEY trong phần Secrets.';
-    }
-    res.status(503).json({
-      success: false,
-      errorCode: status || 'GEMINI_ERROR',
-      reply: userFriendlyError,
+    console.warn('Gemini Chat fallback triggered:', error?.status || error?.code, error?.message || error);
+    const localReply = buildLocalAgronomyReply(promptText, field, weather);
+    const note = isRateLimitError(error)
+      ? '\n\n*(Đang tổng hợp trực tiếp từ Bộ quy tắc nông học & dữ liệu NASA do Gemini AI tạm giới hạn lượt hỏi theo phút)*'
+      : '\n\n*(Đang tổng hợp trực tiếp từ Bộ quy tắc nông học & dữ liệu thửa ruộng)*';
+
+    res.status(200).json({
+      success: true,
+      fromFallback: true,
+      reply: `${localReply}${note}`,
     });
   }
 });

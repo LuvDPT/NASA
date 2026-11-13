@@ -1,11 +1,19 @@
 export type SoilType =
   | 'sand'
+  | 'sandy_loam'
   | 'loam'
+  | 'sandy_clay_loam'
+  | 'clay_loam'
   | 'clay'
   | 'alluvial'
   | 'basalt'
+  | 'ferralsol'
+  | 'gray_degraded'
   | 'acid_sulfate'
   | 'saline'
+  | 'peat_muck'
+  | 'limestone'
+  | 'gravelly'
   | 'unknown';
 
 export type WaterSourceType =

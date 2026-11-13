@@ -23,6 +23,7 @@ interface ChatMessage {
   sender: 'user' | 'ai';
   text: string;
   timestamp: string;
+  fromFallback?: boolean;
 }
 
 export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, weather }) => {
@@ -81,7 +82,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, w
     setIsLoading(true);
 
     try {
-      const { reply, isError } = await GeminiService.sendChatMessage(
+      const { reply, isError, fromFallback } = await GeminiService.sendChatMessage(
         textToSend,
         activeField,
         currentHistory,
@@ -97,6 +98,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, w
         sender: 'ai',
         text: reply,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        fromFallback,
       };
 
       setMessages((prev) => [...prev, aiMsg]);
@@ -195,18 +197,22 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, w
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Quick Suggestion Chips */}
-        <div className="px-4 py-2 bg-stone-50 border-t border-stone-100 flex items-center gap-2 overflow-x-auto text-[11px] no-scrollbar">
-          <span className="text-stone-400 shrink-0 font-semibold">Gợi ý hỏi nhanh:</span>
-          {quickPrompts.map((p, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSendMessage(p)}
-              className="px-2.5 py-1 bg-white hover:bg-emerald-50 border border-stone-200 hover:border-emerald-300 rounded-lg text-stone-700 hover:text-emerald-800 whitespace-nowrap transition cursor-pointer shrink-0 shadow-2xs"
-            >
-              {p}
-            </button>
-          ))}
+        {/* Quick Suggestion Chips (Wrapped cleanly so all 4 sample questions are visible & clickable) */}
+        <div className="px-4 py-2.5 bg-stone-50 border-t border-stone-100 space-y-1.5 text-[11px]">
+          <div className="text-stone-500 font-semibold">Câu hỏi gợi ý nhanh (nhấn để hỏi ngay):</div>
+          <div className="flex flex-wrap gap-1.5">
+            {quickPrompts.map((p, idx) => (
+              <button
+                key={idx}
+                type="button"
+                disabled={isLoading}
+                onClick={() => handleSendMessage(p)}
+                className="px-2.5 py-1.5 bg-white hover:bg-emerald-50 disabled:opacity-50 border border-stone-200 hover:border-emerald-400 rounded-lg text-stone-700 hover:text-emerald-900 text-left transition cursor-pointer shadow-2xs"
+              >
+                {p}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Message Input Box */}

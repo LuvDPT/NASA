@@ -27,19 +27,104 @@ import {
   FeedbackRecord,
   FeedbackType,
 } from './types';
-import { Sprout, ShieldCheck, Plus, MapPin, LogIn, CheckCircle2 } from 'lucide-react';
+import { Sprout, ShieldCheck, Plus, MapPin, LogIn, CheckCircle2, Layers, CalendarCheck, History, RefreshCw, CalendarDays, BarChart3 } from 'lucide-react';
+
+const TAB_TO_PATH: Record<string, string> = {
+  home: '/',
+  dashboard: '/cham-soc',
+  tasks: '/viec-can-lam',
+  feedback: '/phan-hoi',
+  rotation: '/luan-canh',
+  calendar: '/lich-gieo-trong',
+  analytics: '/phan-tich-ban-do',
+  fields: '/ruong-cua-toi',
+  assistant: '/tro-ly-ai',
+  admin: '/quan-tri',
+};
+
+const PATH_TO_TAB: Record<string, string> = {
+  '/': 'home',
+  '/cham-soc': 'dashboard',
+  '/tong-quan': 'dashboard',
+  '/viec-can-lam': 'tasks',
+  '/phan-hoi': 'feedback',
+  '/luan-canh': 'rotation',
+  '/lich-gieo-trong': 'calendar',
+  '/phan-tich-ban-do': 'analytics',
+  '/ruong-cua-toi': 'fields',
+  '/tro-ly-ai': 'assistant',
+  '/quan-tri': 'admin',
+};
+
+function resolveTabFromPathname(pathname: string): string {
+  const clean = (pathname || '/').replace(/\/+$/, '') || '/';
+  return PATH_TO_TAB[clean] || 'home';
+}
+
+const ACTIVE_FIELD_STORAGE_KEY = 'cropcast_active_field_id';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('home');
+  const [activeTab, setActiveTabState] = useState<string>(() => {
+    try {
+      return resolveTabFromPathname(window.location.pathname);
+    } catch {
+      return 'home';
+    }
+  });
   const [authUser, setAuthUser] = useState<AppUser | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
   const [fields, setFields] = useState<FieldProfile[]>([]);
-  const [activeFieldId, setActiveFieldId] = useState<string>('');
+  const [activeFieldId, setActiveFieldIdState] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ACTIVE_FIELD_STORAGE_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
   const [weather, setWeather] = useState<WeatherObservation>(StorageService.getWeather());
   const [tasks, setTasks] = useState<FarmTask[]>([]);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackRecord[]>([]);
   const [datasetRefreshTick, setDatasetRefreshTick] = useState(0);
+
+  const setActiveFieldId = (nextIdOrUpdater: string | ((prev: string) => string)) => {
+    setActiveFieldIdState((prev) => {
+      const next =
+        typeof nextIdOrUpdater === 'function' ? nextIdOrUpdater(prev) : nextIdOrUpdater;
+      try {
+        if (next) localStorage.setItem(ACTIVE_FIELD_STORAGE_KEY, next);
+        else localStorage.removeItem(ACTIVE_FIELD_STORAGE_KEY);
+      } catch {
+        // ignore storage restrictions
+      }
+      return next;
+    });
+  };
+
+  const navigateToTab = (nextTab: string, replace = false) => {
+    setActiveTabState(nextTab);
+    try {
+      const targetPath = TAB_TO_PATH[nextTab] || '/';
+      const currentPath = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
+      if (currentPath !== targetPath) {
+        if (replace) {
+          window.history.replaceState({ tab: nextTab }, '', targetPath);
+        } else {
+          window.history.pushState({ tab: nextTab }, '', targetPath);
+        }
+      }
+    } catch {
+      // ignore history errors
+    }
+  };
+
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveTabState(resolveTabFromPathname(window.location.pathname));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   // Share link redemption state
   const [pendingShareToken, setPendingShareToken] = useState<string | null>(() => {
@@ -87,26 +172,30 @@ export default function App() {
     return () => unsubAuth();
   }, []);
 
-  // Load Public Uploaded NASA Climate Overrides (Admin uploads)
+  // Load Public Uploaded NASA Climate Overrides (Admin uploads, oldest -> newest)
   useEffect(() => {
     let mounted = true;
     FirestoreService.getPublicNasaDatasets().then((datasets) => {
       if (!mounted || datasets.length === 0) return;
-      const latest = datasets.find((d) => d.status === 'COMPLETED' && d.sampleOverrides?.length);
-      if (!latest?.sampleOverrides) return;
+      const completed = datasets
+        .filter((d) => d.status === 'COMPLETED' && d.sampleOverrides?.length)
+        .reverse();
+      if (completed.length === 0) return;
       setWeather((prev) => {
         const next = { ...prev };
-        for (const row of latest.sampleOverrides || []) {
-          if (row.indicator_code === 'T2M') next.temp = row.value;
-          if (row.indicator_code === 'T2M_MIN') next.minTemp = row.value;
-          if (row.indicator_code === 'T2M_MAX') next.maxTemp = row.value;
-          if (row.indicator_code === 'PRECTOTCORR') next.rain = row.value;
-          if (row.indicator_code === 'GWETROOT') next.gwetroot = row.value;
-          if (row.indicator_code === 'GWETTOP') next.gwettop = row.value;
-          if (row.indicator_code === 'RH2M') next.humidity = row.value;
-          if (row.indicator_code === 'ALLSKY_SFC_SW_DWN') next.solarRadiation = row.value;
+        for (const ds of completed) {
+          for (const row of ds.sampleOverrides || []) {
+            if (row.indicator_code === 'T2M') next.temp = row.value;
+            if (row.indicator_code === 'T2M_MIN') next.minTemp = row.value;
+            if (row.indicator_code === 'T2M_MAX') next.maxTemp = row.value;
+            if (row.indicator_code === 'PRECTOTCORR') next.rain = row.value;
+            if (row.indicator_code === 'GWETROOT') next.gwetroot = row.value;
+            if (row.indicator_code === 'GWETTOP') next.gwettop = row.value;
+            if (row.indicator_code === 'RH2M') next.humidity = row.value;
+            if (row.indicator_code === 'ALLSKY_SFC_SW_DWN') next.solarRadiation = row.value;
+          }
+          if (ds.endDate) next.observationDate = ds.endDate;
         }
-        next.observationDate = latest.endDate || prev.observationDate;
         return next;
       });
     });
@@ -141,7 +230,7 @@ export default function App() {
       .then((res) => {
         setAuthMessage(null);
         setActiveFieldId(res.fieldId);
-        setActiveTab('fields');
+        navigateToTab('fields');
         setShareBanner({
           type: 'ok',
           text: `Đã mở quyền xem thửa ruộng "${res.fieldName}" được chia sẻ bởi ${res.ownerName}.`,
@@ -155,25 +244,25 @@ export default function App() {
       });
   }, [authReady, authUser, pendingShareToken]);
 
-  // Subscribe strictly to authenticated farmer's own & shared fields; Admin gets dedicated app-wide overview
+  // Subscribe strictly to authenticated farmer's own & shared fields; preserve sub-website route on reload!
   useEffect(() => {
     if (!authReady) return;
 
     if (!authUser) {
       setFields([]);
-      setActiveFieldId('');
       setTasks([]);
       setFeedbackHistory([]);
-      setActiveTab((prev) => (prev === 'admin' ? 'home' : prev));
+      if (activeTab === 'admin') {
+        navigateToTab('home', true);
+      }
       return;
     }
 
     if (authUser.isAdmin) {
       setFields([]);
-      setActiveFieldId('');
       setTasks([]);
       setFeedbackHistory([]);
-      setActiveTab('admin');
+      navigateToTab('admin', true);
       return;
     }
 
@@ -198,7 +287,7 @@ export default function App() {
     });
 
     if (activeTab === 'admin') {
-      setActiveTab('dashboard');
+      navigateToTab('dashboard', true);
     }
 
     return () => {
@@ -218,27 +307,38 @@ export default function App() {
     setAuthMessage(null);
     const user = await FirestoreService.signInWithGoogle();
     setAuthUser(user);
-    setActiveTab(user.isAdmin ? 'admin' : 'fields');
+    if (user.isAdmin) {
+      navigateToTab('admin');
+    } else if (activeTab === 'home') {
+      navigateToTab('fields');
+    }
   };
 
   const handleUsernameSignIn = async (username: string, password: string) => {
     setAuthMessage(null);
     const user = await FirestoreService.signInWithUsername(username, password);
     setAuthUser(user);
-    setActiveTab(user.isAdmin ? 'admin' : 'fields');
+    if (user.isAdmin) {
+      navigateToTab('admin');
+    } else if (activeTab === 'home') {
+      navigateToTab('fields');
+    }
   };
 
   const handleUsernameSignUp = async (username: string, password: string) => {
     setAuthMessage(null);
     const user = await FirestoreService.signUpWithUsername(username, password);
     setAuthUser(user);
-    setActiveTab('fields');
+    if (activeTab === 'home') {
+      navigateToTab('fields');
+    }
   };
 
   const handleSignOut = async () => {
     await FirestoreService.signOutUser();
     setAuthUser(null);
-    setActiveTab('home');
+    setActiveFieldId('');
+    navigateToTab('home');
   };
 
   const handleSelectField = (fieldId: string) => {
@@ -255,7 +355,7 @@ export default function App() {
     const newTasks = generateTasksFromBrief(brief, created);
     await FirestoreService.createTasks(authUser.uid, newTasks);
     setActiveFieldId(created.id);
-    setActiveTab('fields');
+    navigateToTab('fields');
   };
 
   const handleUpdateField = async (updatedField: FieldProfile) => {
@@ -366,7 +466,7 @@ export default function App() {
           <button
             onClick={() => {
               setWizardOpen(true);
-              setActiveTab('fields');
+              navigateToTab('fields');
             }}
             className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
           >
@@ -401,10 +501,10 @@ export default function App() {
         activeTab={authUser?.isAdmin ? 'admin' : activeTab}
         setActiveTab={(nextTab) => {
           if (authUser?.isAdmin) {
-            setActiveTab('admin');
+            navigateToTab('admin');
             return;
           }
-          setActiveTab(nextTab);
+          navigateToTab(nextTab);
         }}
         fields={fields}
         activeField={activeField}
@@ -415,7 +515,7 @@ export default function App() {
             return;
           }
           setWizardOpen(true);
-          setActiveTab('fields');
+          navigateToTab('fields');
         }}
         authUser={authUser}
         onSignIn={async () => setAuthModalOpen(true)}
@@ -453,7 +553,65 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+        {/* Clean Sub-Website Navigation Strip for Care Hub */}
+        {!authUser?.isAdmin && ['dashboard', 'tasks', 'feedback'].includes(activeTab) && (
+          <div className="bg-white rounded-2xl p-1.5 border border-stone-200 shadow-2xs flex flex-wrap items-center gap-1.5">
+            {[
+              { id: 'dashboard', label: 'Hôm nay & Quyết định', icon: Layers },
+              { id: 'tasks', label: `Việc cần làm (${tasks.filter(t => t.status === 'pending' || t.status === 'skipped').length})`, icon: CalendarCheck },
+              { id: 'feedback', label: 'Phản hồi thực địa', icon: History },
+            ].map((sub) => {
+              const Icon = sub.icon;
+              const isSubActive = activeTab === sub.id;
+              return (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => navigateToTab(sub.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    isSubActive
+                      ? 'bg-emerald-800 text-white shadow-xs'
+                      : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{sub.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Clean Sub-Website Navigation Strip for Rotation & Climate Planning Hub */}
+        {!authUser?.isAdmin && ['rotation', 'calendar', 'analytics'].includes(activeTab) && (
+          <div className="bg-white rounded-2xl p-1.5 border border-stone-200 shadow-2xs flex flex-wrap items-center gap-1.5">
+            {[
+              { id: 'rotation', label: 'Luân canh tối ưu', icon: RefreshCw },
+              { id: 'calendar', label: 'Lịch gieo trồng 12 tháng', icon: CalendarDays },
+              { id: 'analytics', label: 'Bản đồ & Biểu đồ khí hậu', icon: BarChart3 },
+            ].map((sub) => {
+              const Icon = sub.icon;
+              const isSubActive = activeTab === sub.id;
+              return (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => navigateToTab(sub.id)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    isSubActive
+                      ? 'bg-emerald-800 text-white shadow-xs'
+                      : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{sub.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {!authUser?.isAdmin && activeTab === 'home' && (
           <HomeView
             isAuthenticated={!!authUser}
@@ -465,9 +623,9 @@ export default function App() {
                 return;
               }
               setWizardOpen(true);
-              setActiveTab('fields');
+              navigateToTab('fields');
             }}
-            onNavigateTab={setActiveTab}
+            onNavigateTab={navigateToTab}
             weather={weather}
           />
         )}
@@ -483,7 +641,7 @@ export default function App() {
                 setMapInitialCoords({ lat: activeField.lat, lon: activeField.lon });
                 setMapPickerOpen(true);
               }}
-              onNavigateTab={setActiveTab}
+              onNavigateTab={navigateToTab}
               onSendFeedback={handleInstantFeedback}
               onTaskCompleted={() => {}}
             />
@@ -535,8 +693,8 @@ export default function App() {
               fields={fields}
               activeField={activeField}
               onUpdateTaskStatus={handleUpdateTaskStatus}
-              onNavigateTab={setActiveTab}
-              onOpenFeedback={() => setActiveTab('feedback')}
+              onNavigateTab={navigateToTab}
+              onOpenFeedback={() => navigateToTab('feedback')}
             />
           ) : (
             renderMissingFieldPrompt()

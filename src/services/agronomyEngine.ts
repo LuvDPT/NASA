@@ -92,13 +92,16 @@ export function analyzeFieldAgronomy(
     headline = `CẢNH BÁO: Điều kiện lạnh ẩm cần theo dõi`;
     situation = `Nhiệt độ hạ thấp (${weather.temp}°C), độ ẩm không khí cao (${weather.humidity}%) và có mưa phùn/ẩm ướt.`;
 
-    if (adjustedDrainage === 'slow' || field.soilType === 'clay') {
-      analysis = `Thửa ruộng ${field.name} có kết cấu đất sét/thoát nước chậm, kết hợp giai đoạn ${field.crop.currentStage}. Nước đọng lâu ngày trong điều kiện nhiệt độ dưới 20°C cản trở hô hấp rễ và kích hoạt nấm hại (như lở cổ rễ, nghẹt rễ).`;
+    const isSlowSoil =
+      adjustedDrainage === 'slow' ||
+      ['clay', 'clay_loam', 'acid_sulfate', 'peat_muck'].includes(field.soilType);
+    if (isSlowSoil) {
+      analysis = `Thửa ruộng ${field.name} có kết cấu ${getSoilLabel(field.soilType).toLowerCase()} thoát nước chậm, kết hợp giai đoạn ${field.crop.currentStage}. Nước đọng lâu ngày trong điều kiện nhiệt độ dưới 20°C cản trở hô hấp rễ và kích hoạt nấm hại (như lở cổ rễ, nghẹt rễ).`;
       topActions.push({
         id: 'act-drain',
         title: 'Khơi thông rãnh thoát nước ngay đầu bờ',
         priority: 'HIGH',
-        reason: 'Đất sét thoát chậm, nguy cơ bí khí nghẹt rễ khi lạnh ẩm kéo dài',
+        reason: `${getSoilLabel(field.soilType)} thoát nước chậm, nguy cơ bí khí nghẹt rễ khi lạnh ẩm kéo dài`,
         dataBasis: `Nhiệt độ: ${weather.temp}°C, Độ ẩm vùng rễ: ${(weather.gwetroot * 100).toFixed(0)}%, Đất: ${getSoilLabel(field.soilType)}`,
       });
       topActions.push({
@@ -150,13 +153,16 @@ export function analyzeFieldAgronomy(
     headline = `CẢNH BÁO: Nguy cơ bốc thoát hơi nước cao & thiếu ẩm cục bộ`;
     situation = `Nhiệt độ lên tới ${weather.maxTemp}°C, bức xạ mặt trời cao (${weather.solarRadiation} MJ/m²) và lượng mưa thấp.`;
 
-    if (field.soilType === 'sand' || adjustedDrainage === 'fast') {
-      analysis = `Đất ${getSoilLabel(field.soilType)} thấm rút nhanh, kết hợp bức xạ cao khiến tầng mặt khô kiệt trong vòng 6-10 giờ. Cây ${field.crop.name} có nguy cơ héo rũ tạm thời.`;
+    const isFastSoil =
+      ['sand', 'sandy_loam', 'gravelly', 'gray_degraded'].includes(field.soilType) ||
+      adjustedDrainage === 'fast';
+    if (isFastSoil) {
+      analysis = `${getSoilLabel(field.soilType)} thấm rút nhanh, kết hợp bức xạ cao khiến tầng mặt khô kiệt trong vòng 6-10 giờ. Cây ${field.crop.name} có nguy cơ héo rũ tạm thời.`;
       topActions.push({
         id: 'act-irrigate-early',
         title: 'Tưới nước bổ sung vào sáng sớm (05:30 - 07:00)',
         priority: 'HIGH',
-        reason: 'Đất cát bốc thoát hơi cực nhanh, tưới sớm giúp cây tích nước trước khi nắng gắt',
+        reason: `${getSoilLabel(field.soilType)} thoát ẩm rất nhanh, tưới sớm giúp cây tích nước trước khi nắng gắt`,
         dataBasis: `Bức xạ nắng: ${weather.solarRadiation} MJ/m², Độ ẩm tầng mặt: ${(weather.gwettop * 100).toFixed(0)}%`,
       });
       topActions.push({
@@ -464,18 +470,53 @@ export function evaluatePlantingCalendar(
 }
 
 // Helpers
+export interface SoilTypeMeta {
+  type:
+    | 'sand'
+    | 'sandy_loam'
+    | 'loam'
+    | 'sandy_clay_loam'
+    | 'clay_loam'
+    | 'clay'
+    | 'alluvial'
+    | 'basalt'
+    | 'ferralsol'
+    | 'gray_degraded'
+    | 'acid_sulfate'
+    | 'saline'
+    | 'peat_muck'
+    | 'limestone'
+    | 'gravelly'
+    | 'unknown';
+  label: string;
+  shortHint: string;
+  defaultDrainage: 'fast' | 'moderate' | 'slow';
+  defaultHoldsWater: boolean;
+  defaultFlooding: boolean;
+}
+
+export const SOIL_TYPE_CATALOG: SoilTypeMeta[] = [
+  { type: 'alluvial', label: 'Đất phù sa', shortHint: 'Màu mỡ ven sông, giữ ẩm khá tốt', defaultDrainage: 'moderate', defaultHoldsWater: true, defaultFlooding: false },
+  { type: 'loam', label: 'Đất thịt trung bình', shortHint: 'Tơi xốp cân bằng, dễ canh tác đa cây', defaultDrainage: 'moderate', defaultHoldsWater: true, defaultFlooding: false },
+  { type: 'sandy_loam', label: 'Đất cát pha', shortHint: 'Nhẹ đất, thoát nhanh, hợp lạc/khoai/rau', defaultDrainage: 'fast', defaultHoldsWater: false, defaultFlooding: false },
+  { type: 'sandy_clay_loam', label: 'Đất thịt nhẹ', shortHint: 'Dễ cày bừa, thoát nước vừa phải', defaultDrainage: 'moderate', defaultHoldsWater: true, defaultFlooding: false },
+  { type: 'clay_loam', label: 'Đất thịt nặng / sét pha', shortHint: 'Giữ nước và phân tốt, hơi bí khi mưa', defaultDrainage: 'slow', defaultHoldsWater: true, defaultFlooding: true },
+  { type: 'clay', label: 'Đất sét', shortHint: 'Dẻo dính, giữ nước lâu, dễ ngập úng', defaultDrainage: 'slow', defaultHoldsWater: true, defaultFlooding: true },
+  { type: 'sand', label: 'Đất cát', shortHint: 'Rời rạc, rút nước rất nhanh, mau khô', defaultDrainage: 'fast', defaultHoldsWater: false, defaultFlooding: false },
+  { type: 'basalt', label: 'Đất đỏ bazan', shortHint: 'Tầng dày, tơi xốp, giàu khoáng Tây Nguyên', defaultDrainage: 'moderate', defaultHoldsWater: true, defaultFlooding: false },
+  { type: 'ferralsol', label: 'Đất đỏ vàng đồi núi', shortHint: 'Đất đồi Feralit, cần giữ mùn chống rửa trôi', defaultDrainage: 'fast', defaultHoldsWater: false, defaultFlooding: false },
+  { type: 'gray_degraded', label: 'Đất xám bạc màu', shortHint: 'Nghèo mùn, dễ đóng váng mặt, hợp họ Đậu', defaultDrainage: 'fast', defaultHoldsWater: false, defaultFlooding: false },
+  { type: 'acid_sulfate', label: 'Đất phèn', shortHint: 'pH thấp (chua), cần rửa phèn và lên luống', defaultDrainage: 'slow', defaultHoldsWater: true, defaultFlooding: true },
+  { type: 'saline', label: 'Đất mặn / nhiễm mặn', shortHint: 'Ven biển / cửa sông, cần theo dõi độ mặn', defaultDrainage: 'slow', defaultHoldsWater: true, defaultFlooding: false },
+  { type: 'peat_muck', label: 'Đất than bùn / trũng mùn', shortHint: 'Giàu hữu cơ vùng trũng, ngập nước theo mùa', defaultDrainage: 'slow', defaultHoldsWater: true, defaultFlooding: true },
+  { type: 'limestone', label: 'Đất thung lũng đá vôi', shortHint: 'Độ pH trung tính–kiềm nhẹ, thoát khá nhanh', defaultDrainage: 'moderate', defaultHoldsWater: false, defaultFlooding: false },
+  { type: 'gravelly', label: 'Đất sỏi đá / tầng mỏng', shortHint: 'Đất dốc nhiều sỏi sạn, rất dễ khô hạn', defaultDrainage: 'fast', defaultHoldsWater: false, defaultFlooding: false },
+  { type: 'unknown', label: 'Chưa rõ loại đất', shortHint: 'Dùng hướng dẫn nắm đất để nhận diện nhanh', defaultDrainage: 'moderate', defaultHoldsWater: true, defaultFlooding: false },
+];
+
 export function getSoilLabel(type: string): string {
-  const map: Record<string, string> = {
-    sand: 'Đất cát',
-    loam: 'Đất thịt',
-    clay: 'Đất sét',
-    alluvial: 'Đất phù sa',
-    basalt: 'Đất đỏ bazan',
-    acid_sulfate: 'Đất phèn',
-    saline: 'Đất mặn',
-    unknown: 'Chưa rõ loại đất',
-  };
-  return map[type] || type;
+  const found = SOIL_TYPE_CATALOG.find((s) => s.type === type);
+  return found ? found.label : type;
 }
 
 export function getDrainageLabel(drainage: string): string {

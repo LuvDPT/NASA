@@ -33,6 +33,7 @@ import {
   SeedFamilyId,
 } from '../types';
 import {
+  SOIL_TYPE_CATALOG,
   getSoilLabel,
   getDrainageLabel,
   getWaterLabel,
@@ -894,29 +895,35 @@ export const MyFieldsView: React.FC<MyFieldsViewProps> = ({
               {currentStep === 2 && (
                 <div className="space-y-4">
                   <div>
-                    <label className="font-bold text-stone-800 block mb-2">Loại đất chính của thửa ruộng</label>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {[
-                        { type: 'sand', label: 'Đất cát' },
-                        { type: 'loam', label: 'Đất thịt' },
-                        { type: 'clay', label: 'Đất sét' },
-                        { type: 'alluvial', label: 'Đất phù sa' },
-                        { type: 'basalt', label: 'Đất đỏ bazan' },
-                        { type: 'acid_sulfate', label: 'Đất phèn' },
-                        { type: 'saline', label: 'Đất mặn' },
-                        { type: 'unknown', label: 'Chưa rõ loại đất' },
-                      ].map(item => (
+                    <label className="font-bold text-stone-800 block mb-1">Loại đất chính của thửa ruộng (16 nhóm đất)</label>
+                    <p className="text-[11px] text-stone-500 mb-2">
+                      Chọn nhóm đất sát nhất với ruộng nhà bạn — hệ thống sẽ tự gợi ý mức thoát nước và giữ ẩm tương ứng.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 max-h-64 overflow-y-auto pr-1">
+                      {SOIL_TYPE_CATALOG.map((item) => (
                         <button
                           key={item.type}
                           type="button"
-                          onClick={() => setSoilType(item.type as SoilType)}
-                          className={`p-2.5 rounded-xl border text-xs font-bold transition text-left cursor-pointer ${
+                          onClick={() => {
+                            setSoilType(item.type);
+                            setDrainage(item.defaultDrainage);
+                            setHoldsWater(item.defaultHoldsWater);
+                            setProneToFlooding(item.defaultFlooding);
+                          }}
+                          className={`p-2.5 rounded-xl border text-left transition cursor-pointer ${
                             soilType === item.type
                               ? 'bg-emerald-700 text-white border-emerald-700 shadow-xs'
-                              : 'bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100'
+                              : 'bg-stone-50 border-stone-200 text-stone-800 hover:bg-stone-100'
                           }`}
                         >
-                          {item.label}
+                          <div className="text-xs font-bold leading-snug">{item.label}</div>
+                          <div
+                            className={`text-[10px] mt-0.5 leading-tight ${
+                              soilType === item.type ? 'text-emerald-100' : 'text-stone-500'
+                            }`}
+                          >
+                            {item.shortHint}
+                          </div>
                         </button>
                       ))}
                     </div>

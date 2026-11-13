@@ -275,7 +275,9 @@ export function generateRotationStrategies(
     constraints.waterAvailability !== 'abundant' ||
     priorities.includes('water_saving') ||
     indicators.rootMoisturePct < 45;
-  const isSlowDrainage = field.soilCharacteristics.drainage === 'slow' || field.soilType === 'clay';
+  const isSlowDrainage =
+    field.soilCharacteristics.drainage === 'slow' ||
+    ['clay', 'clay_loam', 'acid_sulfate', 'peat_muck'].includes(field.soilType);
   const wantsForageOrIncome =
     priorities.includes('supplemental_income') || constraints.marketPreference !== 'cash_crop';
 
@@ -317,8 +319,11 @@ export function generateRotationStrategies(
   };
 
   // Strategy 2: Legume Nitrogen-Fixing Rotation (Fabaceae)
+  const isLightOrDrySoil = ['sand', 'sandy_loam', 'gray_degraded', 'gravelly', 'ferralsol'].includes(
+    field.soilType
+  );
   const legumeCrop =
-    field.soilType === 'sand' || isWaterTight
+    isLightOrDrySoil || isWaterTight
       ? 'Lạc (Đậu phộng) hoặc Đậu xanh ngắn ngày'
       : 'Đậu tương (Đậu nành) hoặc Đậu xanh';
   const legumeScore =
@@ -369,7 +374,9 @@ export function generateRotationStrategies(
   const resilientCrop =
     constraints.marketPreference === 'forage_livestock'
       ? 'Ngô sinh khối / Cao lương chịu hạn'
-      : field.soilType === 'sand' || field.soilType === 'loam'
+      : ['sand', 'sandy_loam', 'loam', 'sandy_clay_loam', 'gray_degraded', 'basalt'].includes(
+          field.soilType
+        )
       ? 'Khoai lang mật / Khoai lang tím'
       : 'Ngô nếp ngắn ngày hoặc Bí đỏ phủ đất';
   const resilientFamily =

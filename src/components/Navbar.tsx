@@ -49,17 +49,23 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [fieldDropdownOpen, setFieldDropdownOpen] = useState(false);
 
   const navItems = authUser?.isAdmin
-    ? [{ id: 'admin', label: 'Quản trị Tổng thể CropCast', icon: Database }]
+    ? [{ id: 'admin', label: 'Quản trị Tổng thể CropCast', icon: Database, matchTabs: ['admin'] }]
     : [
-        { id: 'home', label: 'Trang chủ', icon: Home },
-        { id: 'dashboard', label: 'Tổng quan', icon: Layers },
-        { id: 'rotation', label: 'Luân canh & Đất', icon: RefreshCw },
-        { id: 'fields', label: 'Ruộng của tôi', icon: Sprout },
-        { id: 'tasks', label: 'Việc cần làm', icon: CalendarCheck },
-        { id: 'analytics', label: 'Phân tích & Bản đồ', icon: BarChart3 },
-        { id: 'calendar', label: 'Lịch gieo trồng', icon: CalendarDays },
-        { id: 'assistant', label: 'Trợ lý AI', icon: Bot },
-        { id: 'feedback', label: 'Phản hồi', icon: History },
+        { id: 'home', label: 'Trang chủ', icon: Home, matchTabs: ['home'] },
+        {
+          id: 'dashboard',
+          label: 'Chăm sóc ruộng',
+          icon: Layers,
+          matchTabs: ['dashboard', 'tasks', 'feedback'],
+        },
+        {
+          id: 'rotation',
+          label: 'Luân canh & Khí hậu',
+          icon: RefreshCw,
+          matchTabs: ['rotation', 'calendar', 'analytics'],
+        },
+        { id: 'fields', label: 'Ruộng của tôi', icon: Sprout, matchTabs: ['fields'] },
+        { id: 'assistant', label: 'Trợ lý AI', icon: Bot, matchTabs: ['assistant'] },
       ];
 
   return (
@@ -228,15 +234,15 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
 
           {/* Desktop Nav Items */}
-          <nav className="hidden lg:flex items-center gap-0.5 overflow-x-auto">
+          <nav className="hidden lg:flex items-center gap-1">
             {navItems.map(item => {
               const Icon = item.icon;
-              const isActive = activeTab === item.id;
+              const isActive = item.matchTabs.includes(activeTab);
               return (
                 <button
                   key={item.id}
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-1 px-2.5 py-2 rounded-lg text-[11px] font-semibold transition cursor-pointer whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
                     isActive
                       ? 'bg-emerald-800 text-white shadow-xs'
                       : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
@@ -300,7 +306,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
           {navItems.map(item => {
             const Icon = item.icon;
-            const isActive = activeTab === item.id;
+            const isActive = item.matchTabs.includes(activeTab);
             return (
               <button
                 key={item.id}
