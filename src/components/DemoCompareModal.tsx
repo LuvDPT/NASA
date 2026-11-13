@@ -262,32 +262,32 @@ export const DemoCompareModal: React.FC<DemoCompareModalProps> = ({ isOpen, onCl
             {/* Current Shared Weather Metrics */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2 text-xs">
               <div className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-center">
-                <div className="text-stone-400 text-[10px]">Nhiệt độ (T2M)</div>
+                <div className="text-stone-500 text-[10px]">Nhiệt độ</div>
                 <div className="font-bold text-stone-800 text-sm">{sharedWeather.temp}°C</div>
                 <div className="text-[10px] text-stone-500">Đêm: {sharedWeather.minTemp}°C</div>
               </div>
               <div className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-center">
-                <div className="text-stone-400 text-[10px]">Lượng mưa (PRECTOTCORR)</div>
+                <div className="text-stone-500 text-[10px]">Lượng mưa</div>
                 <div className="font-bold text-stone-800 text-sm">{sharedWeather.rain} mm</div>
                 <div className="text-[10px] text-stone-500">Mưa tích lũy</div>
               </div>
               <div className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-center">
-                <div className="text-stone-400 text-[10px]">Độ ẩm không khí (RH2M)</div>
+                <div className="text-stone-500 text-[10px]">Độ ẩm không khí</div>
                 <div className="font-bold text-stone-800 text-sm">{sharedWeather.humidity}%</div>
                 <div className="text-[10px] text-stone-500">Nguy cơ nấm</div>
               </div>
               <div className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-center">
-                <div className="text-stone-400 text-[10px]">Ẩm tầng mặt (GWETTOP)</div>
+                <div className="text-stone-500 text-[10px]">Ẩm tầng mặt</div>
                 <div className="font-bold text-stone-800 text-sm">{(sharedWeather.gwettop * 100).toFixed(0)}%</div>
-                <div className="text-[10px] text-stone-500">Lớp 0-5cm</div>
+                <div className="text-[10px] text-stone-500">Lớp 0–5 cm</div>
               </div>
               <div className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-center">
-                <div className="text-stone-400 text-[10px]">Ẩm vùng rễ (GWETROOT)</div>
+                <div className="text-stone-500 text-[10px]">Ẩm vùng rễ</div>
                 <div className="font-bold text-stone-800 text-sm">{(sharedWeather.gwetroot * 100).toFixed(0)}%</div>
-                <div className="text-[10px] text-stone-500">Lớp 0-100cm</div>
+                <div className="text-[10px] text-stone-500">Lớp 0–100 cm</div>
               </div>
               <div className="p-2 rounded-lg bg-stone-50 border border-stone-200 text-center">
-                <div className="text-stone-400 text-[10px]">Bức xạ (ALLSKY)</div>
+                <div className="text-stone-500 text-[10px]">Nắng &amp; Bức xạ</div>
                 <div className="font-bold text-stone-800 text-sm">{sharedWeather.solarRadiation} MJ/m²</div>
                 <div className="text-[10px] text-stone-500">Bốc hơi nước</div>
               </div>
@@ -364,12 +364,14 @@ export const DemoCompareModal: React.FC<DemoCompareModalProps> = ({ isOpen, onCl
                   </span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                      briefA.riskLevel === 'WARNING'
+                      briefA.riskLevel === 'WARNING' || briefA.riskLevel === 'CRITICAL'
                         ? 'bg-amber-100 text-amber-800'
+                        : briefA.riskLevel === 'CAUTION'
+                        ? 'bg-yellow-100 text-yellow-800'
                         : 'bg-emerald-100 text-emerald-800'
                     }`}
                   >
-                    Mức độ: {briefA.riskLevel}
+                    Mức độ: {briefA.riskLevel === 'WARNING' || briefA.riskLevel === 'CRITICAL' ? 'Cảnh báo' : briefA.riskLevel === 'CAUTION' ? 'Cần chú ý' : 'Ổn định'}
                   </span>
                 </div>
 
@@ -480,12 +482,14 @@ export const DemoCompareModal: React.FC<DemoCompareModalProps> = ({ isOpen, onCl
                   </span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                      briefB.riskLevel === 'WARNING'
+                      briefB.riskLevel === 'WARNING' || briefB.riskLevel === 'CRITICAL'
                         ? 'bg-amber-100 text-amber-800'
+                        : briefB.riskLevel === 'CAUTION'
+                        ? 'bg-yellow-100 text-yellow-800'
                         : 'bg-blue-100 text-blue-800'
                     }`}
                   >
-                    Mức độ: {briefB.riskLevel}
+                    Mức độ: {briefB.riskLevel === 'WARNING' || briefB.riskLevel === 'CRITICAL' ? 'Cảnh báo' : briefB.riskLevel === 'CAUTION' ? 'Cần chú ý' : 'Ổn định'}
                   </span>
                 </div>
 

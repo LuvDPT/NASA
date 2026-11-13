@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { ALL_NASA_CELLS } from '../src/data/nasaVietnamGrid.ts';
+import { ALL_NASA_CELLS, findNearestNasaGrid } from '../src/data/nasaVietnamGrid.ts';
 import { CentralDataStatus, DataImportRecord, SyncLogRecord, CsvPreviewResult } from '../src/types/index.ts';
 
 // Environment variables
@@ -274,119 +274,386 @@ export async function executeNasaPowerSync(cellIds?: string[]): Promise<SyncLogR
   }
 }
 
-/**
- * Parse and pre-validate CSV / Excel content before committing
- */
-export function previewUploadedCsv(fileName: string, content: string): CsvPreviewResult {
-  const lines = content.split(/\r?\n/).filter(l => l.trim().length > 0);
-  if (lines.length === 0) {
+interface ParsedNasaRow {
+  cell_id: string;
+  date: string;
+  indicator_code: string;
+  value: number;
+}
+
+const KNOWN_NASA_WIDE_INDICATORS = new Set([
+  'T2M',
+  'T2M_MIN',
+  'T2M_MAX',
+  'T2MDEW',
+  'T2MWET',
+  'PRECTOTCORR',
+  'PRECTOT',
+  'GWETROOT',
+  'GWETTOP',
+  'GWETPROF',
+  'RH2M',
+  'QV2M',
+  'ALLSKY_SFC_SW_DWN',
+  'CLRSKY_SFC_SW_DWN',
+  'WS2M',
+  'WS10M',
+  'PS',
+  'EVPTRNS',
+  'EVLAND',
+]);
+
+function parseSingleCsvToRows(
+  fileName: string,
+  content: string,
+  fallbackCellId?: string
+): {
+  rows: ParsedNasaRow[];
+  invalidRows: number;
+  duplicateCount: number;
+  errors: string[];
+  detectedFormat: '4_COL' | 'NASA_POWER_WIDE' | 'UNKNOWN';
+} {
+  const rawLines = content.split(/\r?\n/);
+  const nonEmptyLines = rawLines.map((l) => l.trim()).filter((l) => l.length > 0);
+  if (nonEmptyLines.length === 0) {
     return {
-      fileName,
-      totalRows: 0,
-      validRows: 0,
+      rows: [],
       invalidRows: 0,
-      uniqueCells: 0,
-      startDate: '',
-      endDate: '',
-      indicatorsDetected: [],
-      sampleRows: [],
-      errors: ['Tệp rỗng hoặc không có dữ liệu'],
       duplicateCount: 0,
+      errors: [`${fileName}: Tệp rỗng hoặc không có dữ liệu`],
+      detectedFormat: 'UNKNOWN',
     };
   }
 
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/"/g, ''));
-  const cellIdx = headers.findIndex(h => h.includes('cell') || h === 'grid');
-  const dateIdx = headers.findIndex(h => h.includes('date') || h === 'day');
-  const indicatorIdx = headers.findIndex(h => h.includes('indicator') || h.includes('param') || h === 'code');
-  const valueIdx = headers.findIndex(h => h.includes('value') || h.includes('val'));
+  // Check for NASA POWER metadata header (-BEGIN HEADER- ... -END HEADER-)
+  let headerLat: number | null = null;
+  let headerLon: number | null = null;
+  let dataStartIdx = 0;
 
-  const errors: string[] = [];
-  if (cellIdx === -1) errors.push('Thiếu cột mã ô lưới (cell_id)');
-  if (dateIdx === -1) errors.push('Thiếu cột ngày tháng (date YYYY-MM-DD)');
-  if (indicatorIdx === -1) errors.push('Thiếu cột mã chỉ số (indicator_code)');
-  if (valueIdx === -1) errors.push('Thiếu cột giá trị số (value)');
+  const endHeaderIdx = nonEmptyLines.findIndex((l) => l.toUpperCase().includes('-END HEADER-'));
+  if (endHeaderIdx !== -1) {
+    for (let i = 0; i < endHeaderIdx; i++) {
+      const line = nonEmptyLines[i];
+      const latMatch = line.match(/Latitude\s+([-+]?\d+(?:\.\d+)?)/i);
+      const lonMatch = line.match(/Longitude\s+([-+]?\d+(?:\.\d+)?)/i);
+      if (latMatch) headerLat = parseFloat(latMatch[1]);
+      if (lonMatch) headerLon = parseFloat(lonMatch[1]);
+    }
+    dataStartIdx = endHeaderIdx + 1;
+  }
 
-  if (errors.length > 0) {
+  if (dataStartIdx >= nonEmptyLines.length) {
     return {
-      fileName,
-      totalRows: lines.length - 1,
-      validRows: 0,
-      invalidRows: lines.length - 1,
-      uniqueCells: 0,
-      startDate: '',
-      endDate: '',
-      indicatorsDetected: [],
-      sampleRows: [],
-      errors,
+      rows: [],
+      invalidRows: 0,
       duplicateCount: 0,
+      errors: [`${fileName}: Không tìm thấy dòng tiêu đề cột sau phần -END HEADER-`],
+      detectedFormat: 'UNKNOWN',
     };
   }
+
+  const headerLine = nonEmptyLines[dataStartIdx];
+  const headersRaw = headerLine.split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+  const headersUpper = headersRaw.map((h) => h.toUpperCase());
+  const headersLower = headersRaw.map((h) => h.toLowerCase());
+
+  // Determine 4-column long format vs NASA POWER wide format
+  const cellIdx = headersLower.findIndex((h) => h === 'cell_id' || h.includes('cell') || h === 'grid');
+  const dateIdx = headersLower.findIndex((h) => h === 'date' || h === 'day' || h === 'yyyymmdd');
+  const indicatorIdx = headersLower.findIndex(
+    (h) => h === 'indicator_code' || h.includes('indicator') || h.includes('param') || h === 'code'
+  );
+  const valueIdx = headersLower.findIndex((h) => h === 'value' || h === 'val');
+
+  const isFourColumn = cellIdx !== -1 && dateIdx !== -1 && indicatorIdx !== -1 && valueIdx !== -1;
+
+  // Wide format date columns (YEAR, MO, DY or YYYYMMDD or DATE)
+  const yearIdx = headersUpper.findIndex((h) => h === 'YEAR');
+  const moIdx = headersUpper.findIndex((h) => h === 'MO' || h === 'MONTH');
+  const dyIdx = headersUpper.findIndex((h) => h === 'DY' || h === 'DAY');
+  const yyyymmddIdx = headersUpper.findIndex((h) => h === 'YYYYMMDD' || h === 'DATE');
+  const latColIdx = headersUpper.findIndex((h) => h === 'LAT' || h === 'LATITUDE');
+  const lonColIdx = headersUpper.findIndex((h) => h === 'LON' || h === 'LONGITUDE');
+
+  const wideIndicatorCols: Array<{ idx: number; code: string }> = [];
+  if (!isFourColumn) {
+    headersUpper.forEach((h, idx) => {
+      if (
+        idx !== yearIdx &&
+        idx !== moIdx &&
+        idx !== dyIdx &&
+        idx !== yyyymmddIdx &&
+        idx !== latColIdx &&
+        idx !== lonColIdx &&
+        idx !== cellIdx &&
+        (KNOWN_NASA_WIDE_INDICATORS.has(h) || /^[A-Z0-9_]{2,24}$/.test(h))
+      ) {
+        if (!['DOY', 'HR', 'UTC', 'INDEX'].includes(h)) {
+          wideIndicatorCols.push({ idx, code: h });
+        }
+      }
+    });
+  }
+
+  const isWideFormat =
+    !isFourColumn &&
+    wideIndicatorCols.length > 0 &&
+    ((yearIdx !== -1 && moIdx !== -1 && dyIdx !== -1) || yyyymmddIdx !== -1);
+
+  if (!isFourColumn && !isWideFormat) {
+    const errors: string[] = [];
+    if (cellIdx === -1) errors.push(`${fileName}: Thiếu cột mã ô lưới (cell_id) hoặc định dạng NASA POWER (YEAR,MO,DY + chỉ số)`);
+    return {
+      rows: [],
+      invalidRows: Math.max(0, nonEmptyLines.length - dataStartIdx - 1),
+      duplicateCount: 0,
+      errors,
+      detectedFormat: 'UNKNOWN',
+    };
+  }
+
+  // Try extracting cell_id from filename if needed (e.g. NASA_VN_008)
+  const fileCellMatch = fileName.match(/NASA_VN_\d{3}/i);
+  const fileMatchedCell = fileCellMatch ? fileCellMatch[0].toUpperCase() : undefined;
+  const headerMappedCell =
+    headerLat !== null && headerLon !== null && Number.isFinite(headerLat) && Number.isFinite(headerLon)
+      ? findNearestNasaGrid(headerLat, headerLon).cell.cellId
+      : undefined;
 
   const seenKeys = new Set<string>();
-  const cellSet = new Set<string>();
-  const indicatorSet = new Set<string>();
-  let minDate = '9999-99-99';
-  let maxDate = '0000-00-00';
-  let duplicates = 0;
-  let validRows = 0;
+  const rows: ParsedNasaRow[] = [];
   let invalidRows = 0;
-  const sampleRows: any[] = [];
+  let duplicateCount = 0;
 
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',').map(c => c.trim().replace(/"/g, ''));
-    if (cols.length < headers.length) {
+  for (let i = dataStartIdx + 1; i < nonEmptyLines.length; i++) {
+    const cols = nonEmptyLines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
+    if (cols.length < Math.min(headersRaw.length, 3)) {
       invalidRows++;
       continue;
     }
 
-    const cId = cols[cellIdx];
-    const dStr = cols[dateIdx];
-    const ind = cols[indicatorIdx];
-    const valStr = cols[valueIdx];
-    const val = parseFloat(valStr);
+    if (isFourColumn) {
+      const cId = cols[cellIdx];
+      const dStr = cols[dateIdx];
+      const ind = cols[indicatorIdx]?.toUpperCase();
+      const val = parseFloat(cols[valueIdx]);
 
-    if (!cId || !dStr || !ind || isNaN(val)) {
-      invalidRows++;
-      continue;
-    }
+      if (!cId || !dStr || !ind || isNaN(val) || val <= -990) {
+        invalidRows++;
+        continue;
+      }
 
-    const key = `${cId}_${dStr}_${ind}`;
-    if (seenKeys.has(key)) {
-      duplicates++;
-    } else {
+      const key = `${cId}_${dStr}_${ind}`;
+      if (seenKeys.has(key)) {
+        duplicateCount++;
+        continue;
+      }
       seenKeys.add(key);
-    }
+      rows.push({ cell_id: cId, date: dStr, indicator_code: ind, value: val });
+    } else {
+      // NASA POWER Wide Format
+      let dateStr = '';
+      if (yearIdx !== -1 && moIdx !== -1 && dyIdx !== -1) {
+        const y = cols[yearIdx]?.padStart(4, '0');
+        const m = cols[moIdx]?.padStart(2, '0');
+        const d = cols[dyIdx]?.padStart(2, '0');
+        if (y && m && d && /^\d{4}$/.test(y)) {
+          dateStr = `${y}-${m}-${d}`;
+        }
+      } else if (yyyymmddIdx !== -1) {
+        const rawD = cols[yyyymmddIdx]?.replace(/[^0-9-]/g, '');
+        if (rawD && rawD.length === 8 && !rawD.includes('-')) {
+          dateStr = `${rawD.slice(0, 4)}-${rawD.slice(4, 6)}-${rawD.slice(6, 8)}`;
+        } else if (rawD && rawD.length >= 10) {
+          dateStr = rawD.slice(0, 10);
+        }
+      }
 
-    cellSet.add(cId);
-    indicatorSet.add(ind);
-    if (dStr < minDate) minDate = dStr;
-    if (dStr > maxDate) maxDate = dStr;
+      if (!dateStr) {
+        invalidRows++;
+        continue;
+      }
 
-    validRows++;
+      let rowCellId = (cellIdx !== -1 ? cols[cellIdx] : '') || headerMappedCell || fileMatchedCell || fallbackCellId || '';
+      if (!rowCellId && latColIdx !== -1 && lonColIdx !== -1) {
+        const rLat = parseFloat(cols[latColIdx]);
+        const rLon = parseFloat(cols[lonColIdx]);
+        if (Number.isFinite(rLat) && Number.isFinite(rLon)) {
+          rowCellId = findNearestNasaGrid(rLat, rLon).cell.cellId;
+        }
+      }
+      if (!rowCellId) {
+        rowCellId = ALL_NASA_CELLS[0]?.cellId || 'NASA_VN_001';
+      }
 
-    if (sampleRows.length < 5) {
-      sampleRows.push({
-        cell_id: cId,
-        date: dStr,
-        indicator_code: ind,
-        value: val,
-      });
+      let addedFromRow = 0;
+      for (const indCol of wideIndicatorCols) {
+        const val = parseFloat(cols[indCol.idx]);
+        if (isNaN(val) || val <= -990) continue; // skip NASA POWER -999 fill values
+        const code = indCol.code === 'PRECTOT' ? 'PRECTOTCORR' : indCol.code;
+        const key = `${rowCellId}_${dateStr}_${code}`;
+        if (seenKeys.has(key)) {
+          duplicateCount++;
+          continue;
+        }
+        seenKeys.add(key);
+        rows.push({
+          cell_id: rowCellId,
+          date: dateStr,
+          indicator_code: code,
+          value: val,
+        });
+        addedFromRow++;
+      }
+      if (addedFromRow === 0) {
+        invalidRows++;
+      }
     }
   }
 
   return {
-    fileName,
-    totalRows: lines.length - 1,
-    validRows,
+    rows,
     invalidRows,
+    duplicateCount,
+    errors: [],
+    detectedFormat: isFourColumn ? '4_COL' : 'NASA_POWER_WIDE',
+  };
+}
+
+/**
+ * Parse and pre-validate CSV / Excel content before committing
+ */
+export function previewUploadedCsv(fileName: string, content: string): CsvPreviewResult {
+  const parsed = parseSingleCsvToRows(fileName, content);
+  const cellSet = new Set<string>();
+  const indicatorSet = new Set<string>();
+  let minDate = '9999-99-99';
+  let maxDate = '0000-00-00';
+
+  for (const r of parsed.rows) {
+    cellSet.add(r.cell_id);
+    indicatorSet.add(r.indicator_code);
+    if (r.date < minDate) minDate = r.date;
+    if (r.date > maxDate) maxDate = r.date;
+  }
+
+  return {
+    fileName,
+    totalRows: parsed.rows.length + parsed.invalidRows,
+    validRows: parsed.rows.length,
+    invalidRows: parsed.invalidRows,
     uniqueCells: cellSet.size,
     startDate: minDate === '9999-99-99' ? '' : minDate,
     endDate: maxDate === '0000-00-00' ? '' : maxDate,
     indicatorsDetected: Array.from(indicatorSet),
-    sampleRows,
-    errors,
-    duplicateCount: duplicates,
+    sampleRows: parsed.rows.slice(0, 8),
+    errors: parsed.errors,
+    duplicateCount: parsed.duplicateCount,
+  };
+}
+
+export interface BatchCsvFileInput {
+  fileName: string;
+  folderName: string;
+  content: string;
+}
+
+export interface BatchPreviewResponse {
+  totalFiles: number;
+  totalFolders: number;
+  folderSummaries: Array<{
+    folderName: string;
+    fileCount: number;
+    validRows: number;
+    errors: string[];
+  }>;
+  preview: CsvPreviewResult;
+  representativeOverrides: ParsedNasaRow[];
+}
+
+export function previewBatchCsvFiles(files: BatchCsvFileInput[]): BatchPreviewResponse {
+  const folderMap = new Map<
+    string,
+    { fileCount: number; validRows: number; errors: string[] }
+  >();
+  const allRows: ParsedNasaRow[] = [];
+  const globalSeen = new Set<string>();
+  let totalInvalid = 0;
+  let totalDuplicates = 0;
+  const allErrors: string[] = [];
+
+  for (const f of files) {
+    const folder = f.folderName || 'Thư mục gốc';
+    const curFolder = folderMap.get(folder) || { fileCount: 0, validRows: 0, errors: [] };
+    curFolder.fileCount += 1;
+
+    const parsed = parseSingleCsvToRows(f.fileName, f.content);
+    totalInvalid += parsed.invalidRows;
+    totalDuplicates += parsed.duplicateCount;
+
+    if (parsed.errors.length > 0) {
+      curFolder.errors.push(...parsed.errors);
+      allErrors.push(...parsed.errors);
+    }
+
+    for (const r of parsed.rows) {
+      const key = `${r.cell_id}_${r.date}_${r.indicator_code}`;
+      if (globalSeen.has(key)) {
+        totalDuplicates++;
+        continue;
+      }
+      globalSeen.add(key);
+      allRows.push(r);
+      curFolder.validRows += 1;
+    }
+
+    folderMap.set(folder, curFolder);
+  }
+
+  const cellSet = new Set<string>();
+  const indicatorSet = new Set<string>();
+  let minDate = '9999-99-99';
+  let maxDate = '0000-00-00';
+
+  for (const r of allRows) {
+    cellSet.add(r.cell_id);
+    indicatorSet.add(r.indicator_code);
+    if (r.date < minDate) minDate = r.date;
+    if (r.date > maxDate) maxDate = r.date;
+  }
+
+  // Pick representative overrides (prioritizing latest date per indicator/cell, capped at 300)
+  const latestRows = [...allRows].sort((a, b) => (b.date > a.date ? 1 : -1));
+  const representativeOverrides = latestRows.slice(0, 300);
+
+  const folderNames = Array.from(folderMap.keys());
+  const batchLabel =
+    folderNames.length === 1
+      ? `${folderNames[0]} (${files.length} tệp)`
+      : `${folderNames.length} thư mục (${files.length} tệp CSV)`;
+
+  return {
+    totalFiles: files.length,
+    totalFolders: folderNames.length,
+    folderSummaries: Array.from(folderMap.entries()).map(([folderName, info]) => ({
+      folderName,
+      ...info,
+    })),
+    preview: {
+      fileName: batchLabel,
+      totalRows: allRows.length + totalInvalid,
+      validRows: allRows.length,
+      invalidRows: totalInvalid,
+      uniqueCells: cellSet.size,
+      startDate: minDate === '9999-99-99' ? '' : minDate,
+      endDate: maxDate === '0000-00-00' ? '' : maxDate,
+      indicatorsDetected: Array.from(indicatorSet),
+      sampleRows: allRows.slice(0, 10),
+      errors: allErrors,
+      duplicateCount: totalDuplicates,
+    },
+    representativeOverrides,
   };
 }
 
@@ -395,6 +662,21 @@ export function previewUploadedCsv(fileName: string, content: string): CsvPrevie
  */
 export async function commitImportedData(preview: CsvPreviewResult, rawContent: string): Promise<DataImportRecord> {
   const version = `v${Date.now()}`;
+  const parsed = parseSingleCsvToRows(preview.fileName, rawContent);
+  for (const dp of parsed.rows) {
+    inMemoryDailyData = inMemoryDailyData.filter(
+      (r) => !(r.cellId === dp.cell_id && r.date === dp.date && r.indicatorCode === dp.indicator_code)
+    );
+    inMemoryDailyData.push({
+      cellId: dp.cell_id,
+      date: dp.date,
+      indicatorCode: dp.indicator_code,
+      value: dp.value,
+      unit: '',
+      version,
+    });
+  }
+
   const importRecord: DataImportRecord = {
     id: `imp-${Date.now()}`,
     fileName: preview.fileName,
@@ -442,6 +724,67 @@ export async function commitImportedData(preview: CsvPreviewResult, rawContent: 
   }
 
   return importRecord;
+}
+
+export async function commitBatchCsvFiles(files: BatchCsvFileInput[]): Promise<{
+  importRecord: DataImportRecord;
+  batchSummary: BatchPreviewResponse;
+}> {
+  const batch = previewBatchCsvFiles(files);
+  const version = `v${Date.now()}`;
+  let totalBytes = 0;
+
+  for (const f of files) {
+    totalBytes += f.content.length;
+    const parsed = parseSingleCsvToRows(f.fileName, f.content);
+    for (const dp of parsed.rows) {
+      inMemoryDailyData = inMemoryDailyData.filter(
+        (r) => !(r.cellId === dp.cell_id && r.date === dp.date && r.indicatorCode === dp.indicator_code)
+      );
+      inMemoryDailyData.push({
+        cellId: dp.cell_id,
+        date: dp.date,
+        indicatorCode: dp.indicator_code,
+        value: dp.value,
+        unit: '',
+        version,
+      });
+    }
+  }
+
+  const importRecord: DataImportRecord = {
+    id: `imp-batch-${Date.now()}`,
+    fileName: batch.preview.fileName,
+    fileSizeBytes: totalBytes,
+    storagePath: `nasa-data-files/batch/${version}`,
+    recordCount: batch.preview.validRows,
+    cellCount: batch.preview.uniqueCells,
+    startDate: batch.preview.startDate,
+    endDate: batch.preview.endDate,
+    status: 'COMPLETED',
+    version,
+    importedBy: 'admin',
+    createdAt: new Date().toISOString(),
+  };
+
+  inMemoryImports.unshift(importRecord);
+  currentActiveVersion = version;
+
+  inMemorySyncLogs.unshift({
+    id: `sync-batch-${Date.now()}`,
+    syncType: 'CSV_UPLOAD',
+    targetCellsCount: batch.preview.uniqueCells,
+    recordsSynced: batch.preview.validRows,
+    startTime: new Date().toISOString(),
+    endTime: new Date().toISOString(),
+    status: 'SUCCESS',
+    latestNasaDate: batch.preview.endDate,
+    details: {
+      message: `Nhập hàng loạt ${batch.totalFolders} thư mục / ${batch.totalFiles} tệp CSV (${batch.preview.validRows.toLocaleString('vi-VN')} bản ghi).`,
+    },
+  });
+
+  return { importRecord, batchSummary: batch };
 }
 
 /**

@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './firebase';
+import { FirestoreService } from './services/firestoreService';
+import { StorageService } from './services/storage';
+import { analyzeFieldAgronomy, generateTasksFromBrief } from './services/agronomyEngine';
 import { Navbar } from './components/Navbar';
+import { HomeView } from './components/HomeView';
 import { DashboardView } from './components/DashboardView';
+import { RotationExplorerView } from './components/RotationExplorerView';
 import { MyFieldsView } from './components/MyFieldsView';
 import { TasksView } from './components/TasksView';
 import { NasaAnalyticsView } from './components/NasaAnalyticsView';
@@ -8,119 +15,381 @@ import { PlantingCalendarView } from './components/PlantingCalendarView';
 import { AiAssistantView } from './components/AiAssistantView';
 import { FeedbackHistoryView } from './components/FeedbackHistoryView';
 import { ExplanationDrawer } from './components/ExplanationDrawer';
-import { DemoCompareModal } from './components/DemoCompareModal';
 import { InteractiveMapModal } from './components/InteractiveMapModal';
 import { AdminDataManagementView } from './components/AdminDataManagementView';
-import { StorageService } from './services/storage';
-import { analyzeFieldAgronomy, generateTasksFromBrief } from './services/agronomyEngine';
-import { GeminiService } from './services/geminiService';
-import { FieldProfile, WeatherObservation, DailyAgronomicBrief, FarmTask, FeedbackRecord, FeedbackType } from './types';
-import { Satellite, Sprout, Heart, ShieldCheck } from 'lucide-react';
+import { AuthModal } from './components/AuthModal';
+import {
+  AppUser,
+  FieldProfile,
+  WeatherObservation,
+  DailyAgronomicBrief,
+  FarmTask,
+  FeedbackRecord,
+  FeedbackType,
+} from './types';
+import { Sprout, ShieldCheck, Plus, MapPin, LogIn, CheckCircle2 } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [activeTab, setActiveTab] = useState<string>('home');
+  const [authUser, setAuthUser] = useState<AppUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+
   const [fields, setFields] = useState<FieldProfile[]>([]);
   const [activeFieldId, setActiveFieldId] = useState<string>('');
   const [weather, setWeather] = useState<WeatherObservation>(StorageService.getWeather());
   const [tasks, setTasks] = useState<FarmTask[]>([]);
   const [feedbackHistory, setFeedbackHistory] = useState<FeedbackRecord[]>([]);
+  const [datasetRefreshTick, setDatasetRefreshTick] = useState(0);
+
+  // Share link redemption state
+  const [pendingShareToken, setPendingShareToken] = useState<string | null>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('share');
+    } catch {
+      return null;
+    }
+  });
+  const [shareBanner, setShareBanner] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   // Modals state
   const [explanationOpen, setExplanationOpen] = useState(false);
-  const [demoCompareOpen, setDemoCompareOpen] = useState(false);
   const [mapPickerOpen, setMapPickerOpen] = useState(false);
-  const [mapInitialCoords, setMapInitialCoords] = useState<{ lat: number; lon: number }>({ lat: 21.03, lon: 105.85 });
+  const [mapInitialCoords, setMapInitialCoords] = useState<{ lat: number; lon: number }>({
+    lat: 21.03,
+    lon: 105.85,
+  });
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authMessage, setAuthMessage] = useState<string | null>(null);
 
-  // Initialize data on mount
+  // Sync Firebase Auth State
   useEffect(() => {
-    const loadedFields = StorageService.getFields();
-    setFields(loadedFields);
-    const activeId = StorageService.getActiveFieldId();
-    setActiveFieldId(activeId);
-    setTasks(StorageService.getTasks());
-    setFeedbackHistory(StorageService.getFeedbackHistory());
+    const unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+      if (fbUser) {
+        const isAdmin = await FirestoreService.checkIsAdmin(
+          fbUser.uid,
+          fbUser.email,
+          fbUser.emailVerified
+        );
+        setAuthUser({
+          uid: fbUser.uid,
+          displayName: fbUser.displayName || 'Nông dân CropCast',
+          email: fbUser.email || '',
+          photoURL: fbUser.photoURL || undefined,
+          emailVerified: fbUser.emailVerified,
+          isAdmin,
+        });
+      } else {
+        setAuthUser(null);
+      }
+      setAuthReady(true);
+    });
+    return () => unsubAuth();
   }, []);
 
-  const activeField = fields.find(f => f.id === activeFieldId) || fields[0];
+  // Load Public Uploaded NASA Climate Overrides (Admin uploads)
+  useEffect(() => {
+    let mounted = true;
+    FirestoreService.getPublicNasaDatasets().then((datasets) => {
+      if (!mounted || datasets.length === 0) return;
+      const latest = datasets.find((d) => d.status === 'COMPLETED' && d.sampleOverrides?.length);
+      if (!latest?.sampleOverrides) return;
+      setWeather((prev) => {
+        const next = { ...prev };
+        for (const row of latest.sampleOverrides || []) {
+          if (row.indicator_code === 'T2M') next.temp = row.value;
+          if (row.indicator_code === 'T2M_MIN') next.minTemp = row.value;
+          if (row.indicator_code === 'T2M_MAX') next.maxTemp = row.value;
+          if (row.indicator_code === 'PRECTOTCORR') next.rain = row.value;
+          if (row.indicator_code === 'GWETROOT') next.gwetroot = row.value;
+          if (row.indicator_code === 'GWETTOP') next.gwettop = row.value;
+          if (row.indicator_code === 'RH2M') next.humidity = row.value;
+          if (row.indicator_code === 'ALLSKY_SFC_SW_DWN') next.solarRadiation = row.value;
+        }
+        next.observationDate = latest.endDate || prev.observationDate;
+        return next;
+      });
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [activeTab, datasetRefreshTick]);
 
-  // Dynamic Rule Analysis Brief for Active Field
-  const ruleBrief: DailyAgronomicBrief = activeField
+  // Redeem pending share link (?share=...) once user is signed in, or prompt login
+  useEffect(() => {
+    if (!authReady || !pendingShareToken) return;
+
+    if (!authUser) {
+      setAuthMessage(
+        'Bạn vừa mở một đường dẫn chia sẻ thửa ruộng. Vui lòng đăng nhập hoặc tạo tài khoản để xem thửa ruộng này.'
+      );
+      setAuthModalOpen(true);
+      return;
+    }
+
+    const tokenToRedeem = pendingShareToken;
+    setPendingShareToken(null);
+
+    try {
+      const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
+      window.history.replaceState({}, '', cleanUrl);
+    } catch {
+      // ignore history error
+    }
+
+    FirestoreService.redeemFieldShareLink(tokenToRedeem, authUser.uid)
+      .then((res) => {
+        setAuthMessage(null);
+        setActiveFieldId(res.fieldId);
+        setActiveTab('fields');
+        setShareBanner({
+          type: 'ok',
+          text: `Đã mở quyền xem thửa ruộng "${res.fieldName}" được chia sẻ bởi ${res.ownerName}.`,
+        });
+      })
+      .catch((err: any) => {
+        setShareBanner({
+          type: 'err',
+          text: err?.message || 'Không thể mở đường dẫn chia sẻ thửa ruộng này.',
+        });
+      });
+  }, [authReady, authUser, pendingShareToken]);
+
+  // Subscribe strictly to authenticated farmer's own & shared fields; Admin gets dedicated app-wide overview
+  useEffect(() => {
+    if (!authReady) return;
+
+    if (!authUser) {
+      setFields([]);
+      setActiveFieldId('');
+      setTasks([]);
+      setFeedbackHistory([]);
+      setActiveTab((prev) => (prev === 'admin' ? 'home' : prev));
+      return;
+    }
+
+    if (authUser.isAdmin) {
+      setFields([]);
+      setActiveFieldId('');
+      setTasks([]);
+      setFeedbackHistory([]);
+      setActiveTab('admin');
+      return;
+    }
+
+    const unsubFields = FirestoreService.subscribeUserFields(
+      authUser.uid,
+      authUser.email,
+      (cloudFields) => {
+        setFields(cloudFields);
+        setActiveFieldId((prev) => {
+          if (prev && cloudFields.some((f) => f.id === prev)) return prev;
+          return cloudFields[0]?.id || '';
+        });
+      }
+    );
+
+    const unsubTasks = FirestoreService.subscribeUserTasks(authUser.uid, (cloudTasks) => {
+      setTasks(cloudTasks);
+    });
+
+    const unsubFeedbacks = FirestoreService.subscribeUserFeedbacks(authUser.uid, (cloudFbs) => {
+      setFeedbackHistory(cloudFbs);
+    });
+
+    if (activeTab === 'admin') {
+      setActiveTab('dashboard');
+    }
+
+    return () => {
+      unsubFields();
+      unsubTasks();
+      unsubFeedbacks();
+    };
+  }, [authReady, authUser]);
+
+  const activeField = fields.find((f) => f.id === activeFieldId) || fields[0];
+
+  const ruleBrief: DailyAgronomicBrief | null = activeField
     ? analyzeFieldAgronomy(activeField, weather, feedbackHistory)
-    : ({} as any);
+    : null;
 
-  // Switch Field Handler
+  const handleGoogleSignIn = async () => {
+    setAuthMessage(null);
+    const user = await FirestoreService.signInWithGoogle();
+    setAuthUser(user);
+    setActiveTab(user.isAdmin ? 'admin' : 'fields');
+  };
+
+  const handleUsernameSignIn = async (username: string, password: string) => {
+    setAuthMessage(null);
+    const user = await FirestoreService.signInWithUsername(username, password);
+    setAuthUser(user);
+    setActiveTab(user.isAdmin ? 'admin' : 'fields');
+  };
+
+  const handleUsernameSignUp = async (username: string, password: string) => {
+    setAuthMessage(null);
+    const user = await FirestoreService.signUpWithUsername(username, password);
+    setAuthUser(user);
+    setActiveTab('fields');
+  };
+
+  const handleSignOut = async () => {
+    await FirestoreService.signOutUser();
+    setAuthUser(null);
+    setActiveTab('home');
+  };
+
   const handleSelectField = (fieldId: string) => {
     setActiveFieldId(fieldId);
-    StorageService.setActiveFieldId(fieldId);
   };
 
-  // Add New Field Handler
-  const handleAddNewField = (newFieldData: Omit<FieldProfile, 'id' | 'nasaGrid'>) => {
-    const created = StorageService.addField(newFieldData);
-    const updatedFields = StorageService.getFields();
-    setFields(updatedFields);
+  const handleAddNewField = async (newFieldData: Omit<FieldProfile, 'id' | 'nasaGrid'>) => {
+    if (!authUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+    const created = await FirestoreService.createField(authUser.uid, newFieldData);
+    const brief = analyzeFieldAgronomy(created, weather);
+    const newTasks = generateTasksFromBrief(brief, created);
+    await FirestoreService.createTasks(authUser.uid, newTasks);
     setActiveFieldId(created.id);
-    setTasks(StorageService.getTasks());
-    setActiveTab('dashboard');
+    setActiveTab('fields');
   };
 
-  // Delete Field Handler
-  const handleDeleteField = (fieldId: string) => {
-    StorageService.deleteField(fieldId);
-    const remaining = StorageService.getFields();
-    setFields(remaining);
-    setActiveFieldId(StorageService.getActiveFieldId());
+  const handleUpdateField = async (updatedField: FieldProfile) => {
+    if (!authUser || updatedField.isSharedWithMe) return;
+    await FirestoreService.updateField(updatedField);
+    setActiveFieldId(updatedField.id);
   };
 
-  // Update Task Status
-  const handleUpdateTaskStatus = (taskId: string, status: FarmTask['status'], note?: string) => {
-    StorageService.updateTaskStatus(taskId, status, note);
-    setTasks(StorageService.getTasks());
+  const handleDeleteField = async (fieldId: string) => {
+    if (!authUser) return;
+    await FirestoreService.deleteField(fieldId);
   };
 
-  // Farmer Feedback Handler
-  const handleAddFeedback = (feedback: Omit<FeedbackRecord, 'id' | 'timestamp'>) => {
-    StorageService.addFeedback(feedback);
-    setFeedbackHistory(StorageService.getFeedbackHistory());
-    setFields(StorageService.getFields());
+  const handleCreateShareLink = async (field: FieldProfile): Promise<string> => {
+    if (!authUser) throw new Error('Vui lòng đăng nhập để chia sẻ.');
+    return FirestoreService.createFieldShareLink(field, authUser.uid, authUser.displayName);
+  };
+
+  const handleRevokeShareLink = async (field: FieldProfile): Promise<void> => {
+    if (!authUser) return;
+    await FirestoreService.revokeFieldShareLink(field.id, field.activeShareToken);
+  };
+
+  const handleShareByEmail = async (field: FieldProfile, email: string): Promise<string> => {
+    if (!authUser) throw new Error('Vui lòng đăng nhập để chia sẻ.');
+    return FirestoreService.shareFieldByEmail(field, authUser.uid, authUser.displayName, email);
+  };
+
+  const handleRemoveSharedEmail = async (fieldId: string, email: string): Promise<void> => {
+    if (!authUser) return;
+    await FirestoreService.removeSharedEmail(fieldId, email);
+  };
+
+  const handleUpdateTaskStatus = async (
+    taskId: string,
+    status: FarmTask['status'],
+    note?: string
+  ) => {
+    if (!authUser) return;
+    await FirestoreService.updateTaskStatus(taskId, status, note);
+  };
+
+  const handleAddFeedback = async (feedback: Omit<FeedbackRecord, 'id' | 'timestamp'>) => {
+    if (!authUser || !activeField || activeField.isSharedWithMe) return;
+    await FirestoreService.createFeedback(authUser.uid, feedback);
+    if (
+      feedback.feedbackType === 'soil_still_dry' ||
+      feedback.feedbackType === 'soil_too_wet'
+    ) {
+      const adjustment =
+        feedback.feedbackType === 'soil_still_dry'
+          ? 'Nông dân phản hồi đất khô nhanh hơn dự báo: Tăng độ nhạy nhắc tưới'
+          : 'Nông dân phản hồi đất giữ ẩm lâu / thoát nước chậm: Ưu tiên khơi thông rãnh';
+      await FirestoreService.updateField({
+        ...activeField,
+        adaptiveMemory: {
+          ...activeField.adaptiveMemory,
+          soilAdjustment: adjustment,
+          lastFeedbackDate: new Date().toISOString().slice(0, 10),
+        },
+      });
+    }
   };
 
   const handleInstantFeedback = (type: FeedbackType, note?: string) => {
-    if (!activeField) return;
+    if (!activeField || !authUser || activeField.isSharedWithMe) return;
     handleAddFeedback({
       fieldId: activeField.id,
       feedbackType: type,
       userComment: note,
       systemActionTaken:
         type === 'soil_still_dry'
-          ? 'AI ghi nhận đất khô nhanh: Tăng độ nhạy tưới'
+          ? 'Ghi nhận đất khô nhanh: Tăng độ nhạy nhắc tưới'
           : type === 'soil_too_wet'
-          ? 'AI ghi nhận đất thoát chậm: Ưu tiên thoát nước'
-          : 'Đã lưu phản hồi vào nhật ký huấn luyện',
+          ? 'Ghi nhận đất thoát chậm: Ưu tiên thoát nước'
+          : 'Đã lưu phản hồi vào nhật ký ruộng',
       appliedToProfile: true,
     });
   };
 
-  // Map Picker Coordinate Selection
-  const handleMapCoordinateSelected = (lat: number, lon: number) => {
-    if (activeField) {
-      const updated = {
-        ...activeField,
-        lat,
-        lon,
-      };
-      StorageService.updateField(updated);
-      setFields(StorageService.getFields());
-    }
+  const handleMapCoordinateSelected = async (lat: number, lon: number) => {
+    if (!activeField || !authUser || activeField.isSharedWithMe) return;
+    const updated = {
+      ...activeField,
+      lat,
+      lon,
+    };
+    await FirestoreService.updateField(updated);
   };
 
-  if (!activeField) {
+  const renderMissingFieldPrompt = () => (
+    <div className="bg-white rounded-2xl border border-stone-200 p-8 text-center space-y-4 shadow-xs max-w-2xl mx-auto">
+      <div className="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
+        {authUser ? <MapPin className="w-6 h-6" /> : <ShieldCheck className="w-6 h-6" />}
+      </div>
+      <h2 className="text-lg font-bold text-stone-900">
+        {authUser
+          ? 'Bạn chưa lưu thửa ruộng nào trong tài khoản'
+          : 'Đăng nhập để xem & tạo thửa ruộng riêng của bạn'}
+      </h2>
+      <p className="text-xs sm:text-sm text-stone-500">
+        {authUser
+          ? 'Hãy tạo hồ sơ thửa ruộng đầu tiên kèm vị trí GPS / bản đồ vệ tinh và họ hạt giống để xem phân tích thời tiết, lịch gieo trồng và phương án luân canh.'
+          : 'Mỗi thửa ruộng thuộc quyền riêng tư của người tạo — CropCast không hiển thị thửa ruộng công khai hay dữ liệu mẫu khi chưa đăng nhập.'}
+      </p>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {authUser ? (
+          <button
+            onClick={() => {
+              setWizardOpen(true);
+              setActiveTab('fields');
+            }}
+            className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" /> Tạo thửa ruộng mới ngay
+          </button>
+        ) : (
+          <button
+            onClick={() => setAuthModalOpen(true)}
+            className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded-xl text-xs transition cursor-pointer flex items-center gap-1.5"
+          >
+            <LogIn className="w-4 h-4" /> Đăng nhập / Tạo tài khoản ngay
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  if (!authReady) {
     return (
       <div className="min-h-screen bg-stone-100 flex items-center justify-center p-4">
         <div className="text-center space-y-2">
           <Sprout className="w-10 h-10 text-emerald-600 animate-spin mx-auto" />
-          <div className="font-bold text-stone-800">Đang khởi tạo AgriNASA AI...</div>
+          <div className="font-bold text-stone-800">Đang khởi tạo CropCast...</div>
         </div>
       </div>
     );
@@ -128,47 +397,128 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-100 text-stone-900 flex flex-col font-sans antialiased">
-      {/* Responsive Navbar */}
       <Navbar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        activeTab={authUser?.isAdmin ? 'admin' : activeTab}
+        setActiveTab={(nextTab) => {
+          if (authUser?.isAdmin) {
+            setActiveTab('admin');
+            return;
+          }
+          setActiveTab(nextTab);
+        }}
         fields={fields}
         activeField={activeField}
         onSelectField={handleSelectField}
         onOpenNewFieldModal={() => {
+          if (!authUser) {
+            setAuthModalOpen(true);
+            return;
+          }
           setWizardOpen(true);
           setActiveTab('fields');
         }}
-        onOpenDemoCompare={() => setDemoCompareOpen(true)}
+        authUser={authUser}
+        onSignIn={async () => setAuthModalOpen(true)}
+        onSignOut={handleSignOut}
       />
 
-      {/* Main App Container */}
+      {authMessage && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs font-semibold flex items-center justify-between">
+            <span>{authMessage}</span>
+            <button onClick={() => setAuthMessage(null)} className="cursor-pointer font-bold">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {shareBanner && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div
+            className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-between ${
+              shareBanner.type === 'ok'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              {shareBanner.text}
+            </span>
+            <button onClick={() => setShareBanner(null)} className="cursor-pointer font-bold">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'dashboard' && (
-          <DashboardView
-            field={activeField}
-            weather={weather}
-            brief={ruleBrief}
-            onOpenExplanation={() => setExplanationOpen(true)}
-            onOpenMap={() => {
-              setMapInitialCoords({ lat: activeField.lat, lon: activeField.lon });
-              setMapPickerOpen(true);
+        {!authUser?.isAdmin && activeTab === 'home' && (
+          <HomeView
+            isAuthenticated={!!authUser}
+            userName={authUser?.displayName}
+            onOpenAuthModal={() => setAuthModalOpen(true)}
+            onOpenNewFieldWizard={() => {
+              if (!authUser) {
+                setAuthModalOpen(true);
+                return;
+              }
+              setWizardOpen(true);
+              setActiveTab('fields');
             }}
             onNavigateTab={setActiveTab}
-            onSendFeedback={handleInstantFeedback}
-            onTaskCompleted={title => {
-              // mark task matching or general
-            }}
+            weather={weather}
           />
         )}
 
-        {activeTab === 'fields' && (
+        {!authUser?.isAdmin && activeTab === 'dashboard' &&
+          (activeField && ruleBrief ? (
+            <DashboardView
+              field={activeField}
+              weather={weather}
+              brief={ruleBrief}
+              onOpenExplanation={() => setExplanationOpen(true)}
+              onOpenMap={() => {
+                setMapInitialCoords({ lat: activeField.lat, lon: activeField.lon });
+                setMapPickerOpen(true);
+              }}
+              onNavigateTab={setActiveTab}
+              onSendFeedback={handleInstantFeedback}
+              onTaskCompleted={() => {}}
+            />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {!authUser?.isAdmin && activeTab === 'rotation' &&
+          (activeField ? (
+            <RotationExplorerView
+              field={activeField}
+              weather={weather}
+              onOpenMap={() => {
+                setMapInitialCoords({ lat: activeField.lat, lon: activeField.lon });
+                setMapPickerOpen(true);
+              }}
+            />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {!authUser?.isAdmin && activeTab === 'fields' && (
           <MyFieldsView
             fields={fields}
             activeField={activeField}
+            isAuthenticated={!!authUser}
             onSelectField={handleSelectField}
             onAddNewField={handleAddNewField}
+            onUpdateField={handleUpdateField}
             onDeleteField={handleDeleteField}
+            onCreateShareLink={handleCreateShareLink}
+            onRevokeShareLink={handleRevokeShareLink}
+            onShareByEmail={handleShareByEmail}
+            onRemoveSharedEmail={handleRemoveSharedEmail}
+            onOpenAuthModal={() => setAuthModalOpen(true)}
             onOpenMapPicker={(curLat, curLon) => {
               setMapInitialCoords({ lat: curLat, lon: curLon });
               setMapPickerOpen(true);
@@ -178,62 +528,76 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'tasks' && (
-          <TasksView
-            tasks={tasks}
-            fields={fields}
-            activeField={activeField}
-            onUpdateTaskStatus={handleUpdateTaskStatus}
-            onNavigateTab={setActiveTab}
-            onOpenFeedback={() => setActiveTab('feedback')}
+        {!authUser?.isAdmin && activeTab === 'tasks' &&
+          (activeField ? (
+            <TasksView
+              tasks={tasks}
+              fields={fields}
+              activeField={activeField}
+              onUpdateTaskStatus={handleUpdateTaskStatus}
+              onNavigateTab={setActiveTab}
+              onOpenFeedback={() => setActiveTab('feedback')}
+            />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {!authUser?.isAdmin && activeTab === 'analytics' &&
+          (activeField ? (
+            <NasaAnalyticsView
+              field={activeField}
+              weather={weather}
+              onOpenMap={() => {
+                setMapInitialCoords({ lat: activeField.lat, lon: activeField.lon });
+                setMapPickerOpen(true);
+              }}
+            />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {!authUser?.isAdmin && activeTab === 'calendar' &&
+          (activeField ? (
+            <PlantingCalendarView activeField={activeField} />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {!authUser?.isAdmin && activeTab === 'assistant' &&
+          (activeField ? (
+            <AiAssistantView activeField={activeField} weather={weather} />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {!authUser?.isAdmin && activeTab === 'feedback' &&
+          (activeField ? (
+            <FeedbackHistoryView
+              activeField={activeField}
+              feedbackHistory={feedbackHistory}
+              onAddFeedback={handleAddFeedback}
+            />
+          ) : (
+            renderMissingFieldPrompt()
+          ))}
+
+        {authUser?.isAdmin && (
+          <AdminDataManagementView
+            onDatasetUpdated={() => setDatasetRefreshTick((t) => t + 1)}
           />
-        )}
-
-        {activeTab === 'analytics' && (
-          <NasaAnalyticsView
-            field={activeField}
-            weather={weather}
-            onOpenMap={() => {
-              setMapInitialCoords({ lat: activeField.lat, lon: activeField.lon });
-              setMapPickerOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'calendar' && (
-          <PlantingCalendarView activeField={activeField} />
-        )}
-
-        {activeTab === 'assistant' && (
-          <AiAssistantView activeField={activeField} weather={weather} />
-        )}
-
-        {activeTab === 'feedback' && (
-          <FeedbackHistoryView
-            activeField={activeField}
-            feedbackHistory={feedbackHistory}
-            onAddFeedback={handleAddFeedback}
-          />
-        )}
-
-        {activeTab === 'admin' && (
-          <AdminDataManagementView />
         )}
       </main>
 
       {/* Modals & Drawers */}
-      <ExplanationDrawer
-        isOpen={explanationOpen}
-        onClose={() => setExplanationOpen(false)}
-        brief={ruleBrief}
-        field={activeField}
-        weather={weather}
-      />
-
-      <DemoCompareModal
-        isOpen={demoCompareOpen}
-        onClose={() => setDemoCompareOpen(false)}
-      />
+      {activeField && ruleBrief && (
+        <ExplanationDrawer
+          isOpen={explanationOpen}
+          onClose={() => setExplanationOpen(false)}
+          brief={ruleBrief}
+          field={activeField}
+          weather={weather}
+        />
+      )}
 
       <InteractiveMapModal
         isOpen={mapPickerOpen}
@@ -243,28 +607,29 @@ export default function App() {
         onSelectCoordinates={handleMapCoordinateSelected}
       />
 
-      {/* Modern Footer */}
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        onGoogleSignIn={handleGoogleSignIn}
+        onUsernameSignIn={handleUsernameSignIn}
+        onUsernameSignUp={handleUsernameSignUp}
+      />
+
+      {/* Footer */}
       <footer className="bg-white border-t border-stone-200 py-6 px-4 text-xs text-stone-500 mt-12">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded bg-emerald-700 text-white flex items-center justify-center font-bold text-xs">
               <Sprout className="w-3.5 h-3.5" />
             </div>
-            <span className="font-bold text-stone-800">AgriNASA AI</span>
-            <span>— Trợ lý canh tác cá nhân hóa từ dữ liệu NASA POWER (2005–2025)</span>
+            <span className="font-bold text-stone-800">CropCast</span>
+            <span>— Công cụ hỗ trợ quyết định luân canh &amp; chăm sóc cây trồng</span>
           </div>
 
-          <div className="flex items-center gap-4 text-stone-600">
+          <div className="flex flex-wrap items-center gap-4 text-stone-600">
             <span className="flex items-center gap-1 text-emerald-800 font-semibold">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" /> Minh bạch khoa học
+              <ShieldCheck className="w-4 h-4 text-emerald-600" /> Dữ liệu ruộng bảo mật riêng tư · Hỗ trợ tham khảo thực địa
             </span>
-            <button
-              onClick={() => setDemoCompareOpen(true)}
-              className="text-amber-700 hover:text-amber-800 font-bold underline cursor-pointer"
-            >
-              Demo Space Apps
-            </button>
-            <span>Phủ sóng 531 ô lưới Việt Nam</span>
           </div>
         </div>
       </footer>

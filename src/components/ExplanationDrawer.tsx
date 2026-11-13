@@ -34,6 +34,21 @@ export const ExplanationDrawer: React.FC<ExplanationDrawerProps> = ({
     }
   };
 
+  const getProvenanceLabel = (type: string) => {
+    switch (type) {
+      case 'NASA_HISTORICAL':
+        return 'Khí hậu lịch sử 21 năm';
+      case 'NASA_CURRENT':
+        return 'Quan trắc thời tiết mới';
+      case 'USER_OBSERVATION':
+        return 'Thông tin nông hộ';
+      case 'AI_INFERENCE':
+        return 'Phân tích nông học';
+      default:
+        return 'Tham khảo';
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/50 backdrop-blur-xs transition-opacity animate-in fade-in">
       <div className="w-full max-w-xl h-full bg-white shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right">
@@ -41,7 +56,7 @@ export const ExplanationDrawer: React.FC<ExplanationDrawerProps> = ({
         <div className="px-6 py-4 bg-emerald-900 text-white flex items-center justify-between">
           <div className="flex items-center gap-2">
             <HelpCircle className="w-5 h-5 text-emerald-300" />
-            <h3 className="text-base font-bold">Minh bạch Cơ chế Ra Quyết định AI</h3>
+            <h3 className="text-base font-bold">Minh bạch Cơ chế Ra Quyết định</h3>
           </div>
           <button
             onClick={onClose}
@@ -59,41 +74,41 @@ export const ExplanationDrawer: React.FC<ExplanationDrawerProps> = ({
             <p className="text-xs text-stone-600 mt-1">{brief.situation}</p>
           </div>
 
-          {/* 1. Dữ liệu NASA đã sử dụng */}
+          {/* 1. Dữ liệu khí hậu đã sử dụng */}
           <section className="space-y-3">
             <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
               <Satellite className="w-4 h-4 text-emerald-600" />
-              <span>1. Dữ liệu NASA POWER & Khí hậu đối chiếu</span>
+              <span>1. Dữ liệu Khí hậu &amp; Độ ẩm đất đối chiếu</span>
             </div>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="p-2.5 bg-stone-50 border border-stone-200 rounded-lg">
-                <div className="text-stone-500">Tâm ô lưới NASA:</div>
-                <div className="font-semibold text-stone-800">{field.nasaGrid.lat}°N, {field.nasaGrid.lon}°E</div>
+                <div className="text-stone-500">Điểm khí hậu gần nhất:</div>
+                <div className="font-semibold text-stone-800">{field.nasaGrid.lat}°B, {field.nasaGrid.lon}°Đ</div>
                 <div className="text-[11px] text-stone-400">Cách thửa ruộng: {field.nasaGrid.distanceKm} km</div>
               </div>
               <div className="p-2.5 bg-stone-50 border border-stone-200 rounded-lg">
                 <div className="text-stone-500">Chuỗi dữ liệu lịch sử:</div>
                 <div className="font-semibold text-stone-800">2005 – 2025 (21 năm)</div>
-                <div className="text-[11px] text-stone-400">Độ phân giải: 0.5° (~55km)</div>
+                <div className="text-[11px] text-stone-400">Theo lưới khí hậu vùng</div>
               </div>
               <div className="p-2.5 bg-stone-50 border border-stone-200 rounded-lg">
-                <div className="text-stone-500">Độ ẩm tầng mặt (GWETTOP):</div>
+                <div className="text-stone-500">Độ ẩm đất tầng mặt:</div>
                 <div className="font-semibold text-stone-800">{(weather.gwettop * 100).toFixed(0)}%</div>
-                <div className="text-[11px] text-stone-400">Lớp đất 0-5cm</div>
+                <div className="text-[11px] text-stone-400">Lớp đất 0–5 cm</div>
               </div>
               <div className="p-2.5 bg-stone-50 border border-stone-200 rounded-lg">
-                <div className="text-stone-500">Độ ẩm vùng rễ (GWETROOT):</div>
+                <div className="text-stone-500">Độ ẩm đất vùng rễ:</div>
                 <div className="font-semibold text-stone-800">{(weather.gwetroot * 100).toFixed(0)}%</div>
-                <div className="text-[11px] text-stone-400">Lớp rễ 0-100cm</div>
+                <div className="text-[11px] text-stone-400">Lớp rễ 0–100 cm</div>
               </div>
             </div>
           </section>
 
-          {/* 2. Nhãn nguồn gốc dữ liệu (Data Provenance Badges) */}
+          {/* 2. Nhãn nguồn gốc dữ liệu */}
           <section className="space-y-2">
             <div className="flex items-center gap-2 text-stone-900 font-bold text-sm">
               <Database className="w-4 h-4 text-blue-600" />
-              <span>2. Truy xuất nguồn gốc tham số (Data Provenance)</span>
+              <span>2. Nguồn gốc thông tin tham chiếu</span>
             </div>
             <div className="space-y-2">
               {brief.provenances.map((prov, i) => (
@@ -101,7 +116,7 @@ export const ExplanationDrawer: React.FC<ExplanationDrawerProps> = ({
                   <div className="flex items-center justify-between">
                     <span className="font-semibold text-xs text-stone-900">{prov.label}</span>
                     <span className={`text-[10px] px-2 py-0.5 rounded font-bold border ${getBadgeStyle(prov.type)}`}>
-                      {prov.type}
+                      {getProvenanceLabel(prov.type)}
                     </span>
                   </div>
                   <p className="text-xs text-stone-600">{prov.description}</p>

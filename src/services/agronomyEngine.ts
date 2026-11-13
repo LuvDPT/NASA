@@ -99,21 +99,21 @@ export function analyzeFieldAgronomy(
         title: 'Khơi thông rãnh thoát nước ngay đầu bờ',
         priority: 'HIGH',
         reason: 'Đất sét thoát chậm, nguy cơ bí khí nghẹt rễ khi lạnh ẩm kéo dài',
-        dataBasis: `T2M: ${weather.temp}°C, GWETROOT: ${(weather.gwetroot * 100).toFixed(0)}%, Đất: ${getSoilLabel(field.soilType)}`,
+        dataBasis: `Nhiệt độ: ${weather.temp}°C, Độ ẩm vùng rễ: ${(weather.gwetroot * 100).toFixed(0)}%, Đất: ${getSoilLabel(field.soilType)}`,
       });
       topActions.push({
         id: 'act-check-root',
         title: 'Kiểm tra độ ẩm đất bề mặt trước khi thao tác',
         priority: 'HIGH',
         reason: 'Xác minh độ nhão thực tế của tầng đất 0-5cm trước khi tưới hoặc đi lại trên ruộng',
-        dataBasis: 'Dữ liệu NASA GWETTOP và người dùng phản hồi',
+        dataBasis: 'Độ ẩm tầng mặt và phản hồi thực địa',
       });
       topActions.push({
         id: 'act-leaf-check',
         title: 'Quan sát mặt dưới lá và gốc để phát hiện đốm nấm ẩm',
         priority: 'MEDIUM',
         reason: 'Ẩm độ không khí >85% tạo màng ẩm thuận lợi cho nấm bệnh phát triển',
-        dataBasis: `RH2M: ${weather.humidity}%, Mưa: ${weather.rain}mm`,
+        dataBasis: `Độ ẩm không khí: ${weather.humidity}%, Lượng mưa: ${weather.rain}mm`,
       });
       postponeActions.push('Tạm hoãn tưới nước vì đất đang giữ ẩm bão hòa, tưới thêm sẽ gây ngạt rễ.');
       postponeActions.push('Hoãn bón phân đạm (Urê) vì cây hấp thu kém khi lạnh ẩm, dễ gây xót và bùng phát bệnh nấm.');
@@ -125,14 +125,14 @@ export function analyzeFieldAgronomy(
         title: 'Kiểm tra độ ẩm thực tế tại tầng rễ',
         priority: 'HIGH',
         reason: 'Đất cát/thịt rút nước nhanh, không mặc định mưa phùn đã ngấm đủ sâu đến rễ',
-        dataBasis: `GWETROOT: ${(weather.gwetroot * 100).toFixed(0)}%, Đất: ${getSoilLabel(field.soilType)}`,
+        dataBasis: `Độ ẩm vùng rễ: ${(weather.gwetroot * 100).toFixed(0)}%, Đất: ${getSoilLabel(field.soilType)}`,
       });
       topActions.push({
         id: 'act-warm-mulch',
         title: 'Cân nhắc tủ gốc bằng rơm rạ khô giữ ấm rễ',
         priority: 'MEDIUM',
         reason: 'Giữ nhiệt độ đất vùng rễ ổn định khi nhiệt độ ban đêm hạ sâu',
-        dataBasis: `T2M_MIN: ${weather.minTemp}°C (NASA Climatology)`,
+        dataBasis: `Nhiệt độ thấp nhất ban đêm: ${weather.minTemp}°C`,
       });
       topActions.push({
         id: 'act-inspect-cold',
@@ -157,7 +157,7 @@ export function analyzeFieldAgronomy(
         title: 'Tưới nước bổ sung vào sáng sớm (05:30 - 07:00)',
         priority: 'HIGH',
         reason: 'Đất cát bốc thoát hơi cực nhanh, tưới sớm giúp cây tích nước trước khi nắng gắt',
-        dataBasis: `ALLSKY_SFC_SW_DWN: ${weather.solarRadiation} MJ/m², GWETTOP: ${(weather.gwettop * 100).toFixed(0)}%`,
+        dataBasis: `Bức xạ nắng: ${weather.solarRadiation} MJ/m², Độ ẩm tầng mặt: ${(weather.gwettop * 100).toFixed(0)}%`,
       });
       topActions.push({
         id: 'act-mulch-sand',
@@ -183,7 +183,7 @@ export function analyzeFieldAgronomy(
         title: 'Dùng que thử kiểm tra độ ẩm ở độ sâu 10-15cm',
         priority: 'HIGH',
         reason: 'Đất sét bề mặt khô nứt nhưng tầng rễ có thể vẫn đủ ẩm, tránh tưới lãng phí',
-        dataBasis: `GWETROOT: ${(weather.gwetroot * 100).toFixed(0)}% vs GWETTOP: ${(weather.gwettop * 100).toFixed(0)}%`,
+        dataBasis: `Độ ẩm vùng rễ: ${(weather.gwetroot * 100).toFixed(0)}% so với tầng mặt: ${(weather.gwettop * 100).toFixed(0)}%`,
       });
       topActions.push({
         id: 'act-regulate-irrigation',
@@ -197,7 +197,7 @@ export function analyzeFieldAgronomy(
         title: 'Cân nhắc phun vi lượng / Kali chống sốc nhiệt cho cây',
         priority: 'LOW',
         reason: 'Tăng cường sức chịu hạn cho giai đoạn ' + field.crop.currentStage,
-        dataBasis: `T2M_MAX: ${weather.maxTemp}°C`,
+        dataBasis: `Nhiệt độ cao nhất: ${weather.maxTemp}°C`,
       });
       postponeActions.push('Hoãn cày xới sâu đất lúc này vì sẽ làm đứt rễ non và tăng thoát hơi ẩm từ lòng đất.');
     }
@@ -207,7 +207,7 @@ export function analyzeFieldAgronomy(
     riskLevel = 'CAUTION';
     headline = `CHÚ Ý: Giai đoạn nhạy cảm ${field.crop.currentStage}`;
     situation = `Cây đang trong thời kỳ thụ phấn / làm hạt. Cần đặc biệt chú trọng duy trì mực nước và vi khí hậu ruộng.`;
-    analysis = `Bất kỳ sự thiếu hụt ẩm hay mưa giông bất chợt nào trong giai đoạn này đều có thể giảm tỷ lệ đậu hạt/quả. Lịch sử NASA 21 năm cho thấy khu vực này cần duy trì độ ẩm rễ >50%.`;
+    analysis = `Bất kỳ sự thiếu hụt ẩm hay mưa giông bất chợt nào trong giai đoạn này đều có thể giảm tỷ lệ đậu hạt/quả. Lịch sử khí hậu 21 năm cho thấy khu vực này cần duy trì độ ẩm rễ >50%.`;
 
     topActions.push({
       id: 'act-maintain-moist',
@@ -221,7 +221,7 @@ export function analyzeFieldAgronomy(
       title: 'Kiểm tra mật độ sâu/bọ trĩ/rầy phấn trắng',
       priority: 'MEDIUM',
       reason: 'Độ ẩm ' + weather.humidity + '% và nhiệt độ ' + weather.temp + '°C là điều kiện thích nghi của rầy non',
-      dataBasis: `RH2M: ${weather.humidity}%, T2M: ${weather.temp}°C`,
+      dataBasis: `Độ ẩm không khí: ${weather.humidity}%, Nhiệt độ: ${weather.temp}°C`,
     });
     topActions.push({
       id: 'act-nutrient-bloom',
@@ -246,14 +246,14 @@ export function analyzeFieldAgronomy(
       title: 'Duy trì chế độ tưới tiết kiệm theo nhu cầu thực',
       priority: 'MEDIUM',
       reason: `Độ ẩm rễ đạt ${(weather.gwetroot * 100).toFixed(0)}%, chưa cần tưới ồ ạt, bám sát mục tiêu ${getGoalLabel(field.primaryGoal)}`,
-      dataBasis: `GWETROOT: ${(weather.gwetroot * 100).toFixed(0)}%`,
+      dataBasis: `Độ ẩm vùng rễ: ${(weather.gwetroot * 100).toFixed(0)}%`,
     });
     topActions.push({
       id: 'act-plan-fertilizer',
       title: 'Chuẩn bị vật tư cho đợt bón thúc tiếp theo',
       priority: 'LOW',
       reason: 'Cây đang hấp thụ dinh dưỡng tốt trong điều kiện nắng ấm cân bằng',
-      dataBasis: `Nhiệt độ: ${weather.temp}°C, Bức xạ: ${weather.solarRadiation} MJ/m²`,
+      dataBasis: `Nhiệt độ: ${weather.temp}°C, Bức xạ nắng: ${weather.solarRadiation} MJ/m²`,
     });
   }
 
@@ -342,25 +342,25 @@ export function evaluatePlantingCalendar(
           status = 'risk';
           adverseYears = 14; // in 21 years
           adverseDaysAvg = 8.5;
-          thresholdCondition = 'Nhiệt độ T2M_MIN < 12°C (Rét hại làm chết mạ)';
-          explanation = 'Trong 21 năm NASA POWER, có 14 năm xuất hiện rét đậm/hại kéo dài trên 5 ngày, nguy cơ chết mạ nếu không che phủ nilon.';
+          thresholdCondition = 'Nhiệt độ ban đêm xuống dưới 12°C (Rét hại làm chết mạ)';
+          explanation = 'Trong 21 năm quan trắc, có 14 năm xuất hiện rét đậm/hại kéo dài trên 5 ngày, nguy cơ chết mạ nếu không che phủ nilon.';
         } else if (month === 2) {
           status = 'caution';
           adverseYears = 8;
           adverseDaysAvg = 4.2;
-          thresholdCondition = 'Nhiệt độ T2M < 15°C kết hợp mưa phùn';
+          thresholdCondition = 'Nhiệt độ trung bình dưới 15°C kết hợp mưa phùn';
           explanation = 'Gieo cấy vụ Xuân cần theo dõi các đợt không khí lạnh tăng cường; 8 trong 21 năm có đợt rét muộn ảnh hưởng đẻ nhánh.';
         } else if (month >= 3 && month <= 5) {
           status = 'optimal';
           adverseYears = 2;
           adverseDaysAvg = 1.0;
-          thresholdCondition = 'Nhiệt độ 22-29°C, ẩm độ và bức xạ mặt trời tăng đều';
-          explanation = 'Giai đoạn quang chu kỳ và nhiệt tích lũy tối ưu cho lúa sinh trưởng thân lá và làm đòng.';
+          thresholdCondition = 'Nhiệt độ 22-29°C, ẩm độ và nắng tăng đều';
+          explanation = 'Giai đoạn ánh sáng và nhiệt độ tối ưu cho lúa sinh trưởng thân lá và làm đòng.';
         } else if (month === 7 || month === 8) {
           status = 'caution';
           adverseYears = 9;
           adverseDaysAvg = 6.0;
-          thresholdCondition = 'Mưa lớn PRECTOTCORR > 50mm/ngày và nguy cơ ngập úng';
+          thresholdCondition = 'Mưa lớn trên 50mm/ngày và nguy cơ ngập úng';
           explanation = 'Giai đoạn mưa bão cao điểm mùa hè; đất trũng thoát nước chậm cần chuẩn bị máy bơm tiêu úng.';
         } else {
           status = 'optimal';
@@ -375,7 +375,7 @@ export function evaluatePlantingCalendar(
           status = 'caution';
           adverseYears = 11;
           adverseDaysAvg = 18.0;
-          thresholdCondition = 'Hạn hán & Xâm nhập mặn nguồn nước (GWETROOT thấp)';
+          thresholdCondition = 'Hạn hán & Xâm nhập mặn nguồn nước (độ ẩm vùng rễ xuống thấp)';
           explanation = 'Mùa khô cao điểm ĐBSCL; 11 trong 21 năm có ranh mặn 4g/l lấn sâu vào sông rạch. Cần kiểm tra độ mặn trước khi bơm tưới.';
         } else if (month >= 9 && month <= 11) {
           status = 'caution';
@@ -398,13 +398,13 @@ export function evaluatePlantingCalendar(
           status = 'optimal';
           adverseYears = 1;
           adverseDaysAvg = 1.0;
-          thresholdCondition = 'Thời tiết mát mẻ 16-22°C rất thích hợp rau họ thập tự';
+          thresholdCondition = 'Thời tiết mát mẻ 16-22°C rất thích hợp rau họ Cải';
           explanation = 'Vụ Đông là mùa vàng của rau cải; năng suất và phẩm chất lá ngon ngọt nhất.';
         } else if (month >= 6 && month <= 8) {
           status = 'risk';
           adverseYears = 17;
           adverseDaysAvg = 12.0;
-          thresholdCondition = 'Nhiệt độ T2M_MAX > 36°C và mưa rào xối xả';
+          thresholdCondition = 'Nhiệt độ ban ngày vượt 36°C và mưa rào xối xả';
           explanation = 'Nắng nóng gay gắt kết hợp mưa dập lá làm bùng phát thối nhũn vi khuẩn; 17 trong 21 năm có đợt sốc nhiệt.';
         } else {
           status = 'caution';

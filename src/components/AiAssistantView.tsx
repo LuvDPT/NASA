@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { FieldProfile, WeatherObservation } from '../types';
 import { GeminiService } from '../services/geminiService';
+import { getSoilLabel } from '../services/agronomyEngine';
 
 interface AiAssistantViewProps {
   activeField: FieldProfile;
@@ -25,23 +26,29 @@ interface ChatMessage {
 }
 
 export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, weather }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: 'msg-0',
-      sender: 'ai',
-      text: `Xin chào bác nông dân! Tôi là Trợ lý AI Canh tác AgriNASA. Tôi đang theo dõi thửa ruộng "${activeField.name}" (${activeField.crop.name}, ${activeField.crop.variety}) tại ${activeField.province}. Hôm nay ruộng của bác đang có nhiệt độ ${weather.temp}°C, ẩm độ rễ ${(weather.gwetroot * 100).toFixed(0)}%. Bác cần tôi giải đáp hoặc tính toán điều gì cho ruộng hôm nay?`,
-      timestamp: '07:00',
-    },
-  ]);
+  const buildGreeting = (field: FieldProfile): ChatMessage => ({
+    id: `msg-0-${field.id}`,
+    sender: 'ai',
+    text: `Xin chào bác nông dân! Tôi là Trợ lý AI Canh tác CropCast. Tôi đang theo dõi thửa ruộng "${field.name}" (${field.crop.name}, ${field.crop.variety}) tại ${field.province}. Hôm nay ruộng đang có nhiệt độ ${weather.temp}°C, ẩm độ rễ ${(weather.gwetroot * 100).toFixed(0)}%. Bác cần tôi giải đáp hoặc tính toán điều gì cho ruộng hôm nay?`,
+    timestamp: '07:00',
+  });
+
+  const [messages, setMessages] = useState<ChatMessage[]>([buildGreeting(activeField)]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [lastFailedPrompt, setLastFailedPrompt] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    setMessages([buildGreeting(activeField)]);
+    setLastFailedPrompt(null);
+  }, [activeField.id]);
+
   const quickPrompts = [
-    `Đất ruộng của tôi là ${activeField.soilType}, hôm nay có nên tưới thêm không?`,
+    `Đất ruộng của tôi là ${getSoilLabel(activeField.soilType)}, hôm nay có nên tưới thêm không?`,
     `Với nhiệt độ ${weather.temp}°C và ẩm ${weather.humidity}%, có nguy cơ nấm bệnh gì?`,
     `Khi nào là thời điểm thích hợp nhất để bón phân đợt tới?`,
-    `Dữ liệu NASA 21 năm tại đây có hay gặp đợt rét/hạn vào thời điểm này không?`,
+    `Dữ liệu khí hậu 21 năm tại đây có hay gặp đợt rét/hạn vào thời điểm này không?`,
   ];
 
   const scrollToBottom = () => {
@@ -53,27 +60,37 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, w
   }, [messages, isLoading]);
 
   const handleSendMessage = async (customPrompt?: string) => {
-    const textToSend = customPrompt || inputText;
-    if (!textToSend.trim() || isLoading) return;
+    const textToSend = (customPrompt || inputText).trim();
+    if (!textToSend || isLoading) return;
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       sender: 'user',
-      text: textToSend.trim(),
+      text: textToSend,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    setMessages(prev => [...prev, userMsg]);
-    setInputText('');
+    const currentHistory = messages.map((m) => ({
+      role: m.sender === 'user' ? ('user' as const) : ('model' as const),
+      parts: m.text,
+    }));
+
+    setMessages((prev) => [...prev, userMsg]);
+    if (!customPrompt) setInputText('');
+    setLastFailedPrompt(null);
     setIsLoading(true);
 
     try {
-      const history = messages.map(m => ({
-        role: m.sender === 'user' ? ('user' as const) : ('model' as const),
-        parts: m.text,
-      }));
+      const { reply, isError } = await GeminiService.sendChatMessage(
+        textToSend,
+        activeField,
+        currentHistory,
+        weather
+      );
 
-      const reply = await GeminiService.sendChatMessage(textToSend, activeField, history);
+      if (isError) {
+        setLastFailedPrompt(textToSend);
+      }
 
       const aiMsg: ChatMessage = {
         id: `ai-${Date.now()}`,
@@ -82,9 +99,10 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, w
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
-      setMessages(prev => [...prev, aiMsg]);
+      setMessages((prev) => [...prev, aiMsg]);
     } catch (err) {
       console.error(err);
+      setLastFailedPrompt(textToSend);
     } finally {
       setIsLoading(false);
     }
@@ -159,6 +177,18 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ activeField, w
             <div className="flex items-center gap-2 text-stone-500 text-xs italic pl-11">
               <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
               <span>AI đang phân tích dữ liệu đất & thời tiết NASA...</span>
+            </div>
+          )}
+
+          {!isLoading && lastFailedPrompt && (
+            <div className="pl-11">
+              <button
+                type="button"
+                onClick={() => handleSendMessage(lastFailedPrompt)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 text-xs font-bold cursor-pointer transition"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Thử gửi lại câu hỏi vừa rồi
+              </button>
             </div>
           )}
 

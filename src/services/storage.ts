@@ -11,7 +11,7 @@ const STORAGE_KEYS = {
 };
 
 // Default seed fields for realistic farmer onboarding demonstration
-const DEFAULT_FIELDS: FieldProfile[] = [
+export const DEFAULT_FIELDS: FieldProfile[] = [
   {
     id: 'FIELD_01_VEG',
     name: 'Thửa 1: Cải xanh Đông Xuân',
@@ -37,6 +37,7 @@ const DEFAULT_FIELDS: FieldProfile[] = [
       notes: 'Ao chứa nước mưa và kênh dẫn nội đồng, nguồn nước tương đối sạch.',
     },
     crop: {
+      seedFamily: 'brassicaceae',
       name: 'Rau cải xanh',
       category: 'vegetable',
       variety: 'Cải ngọt Trang Nông F1',
@@ -88,7 +89,8 @@ const DEFAULT_FIELDS: FieldProfile[] = [
       notes: 'Giếng khoan sâu 35m nước trong, pH giếng 6.8.',
     },
     crop: {
-      name: 'Ngô lai (Bắp giống)',
+      seedFamily: 'poaceae',
+      name: 'Ngô (Bắp)',
       category: 'maize',
       variety: 'NK7328 BT/GT',
       plantingDate: '2026-10-15',
@@ -139,14 +141,15 @@ const DEFAULT_FIELDS: FieldProfile[] = [
       notes: 'Hệ thống kênh thủy lợi cấp 2, phù sa dồi dào, kiểm soát được cống.',
     },
     crop: {
-      name: 'Lúa chất lượng cao',
+      seedFamily: 'poaceae',
+      name: 'Lúa nước',
       category: 'rice',
       variety: 'ST25 (Gạo ngon nhất thế giới)',
       plantingDate: '2026-10-20',
       currentStage: 'Đẻ nhánh rộ (Nhu cầu nước nông)',
       stageIndex: 2,
-      farmingMethod: 'Quy trình 1 phải 5 giảm (1P5G)',
-      irrigationMethod: 'Nông - Lộ - Phơi xen kẽ (AWD)',
+      farmingMethod: 'Quy trình 1 phải 5 giảm',
+      irrigationMethod: 'Tưới ngập - lộ - phơi xen kẽ',
       lastFertilizerDate: '2026-11-01',
       healthStatus: 'healthy',
     },
@@ -191,13 +194,16 @@ export const StorageService = {
   getFields(): FieldProfile[] {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.FIELDS);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data) as FieldProfile[];
+        return parsed.filter(
+          (f) => !['FIELD_01_VEG', 'FIELD_02_CORN', 'FIELD_03_RICE'].includes(f.id)
+        );
+      }
     } catch (e) {
       console.error('Failed to read fields from localStorage', e);
     }
-    // Seed initial fields
-    localStorage.setItem(STORAGE_KEYS.FIELDS, JSON.stringify(DEFAULT_FIELDS));
-    return DEFAULT_FIELDS;
+    return [];
   },
 
   saveFields(fields: FieldProfile[]) {
@@ -206,19 +212,19 @@ export const StorageService = {
 
   getActiveFieldId(): string {
     const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_FIELD_ID);
-    if (saved) return saved;
     const fields = this.getFields();
-    return fields[0]?.id || DEFAULT_FIELDS[0].id;
+    if (saved && fields.some((f) => f.id === saved)) return saved;
+    return fields[0]?.id || '';
   },
 
   setActiveFieldId(id: string) {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_FIELD_ID, id);
   },
 
-  getActiveField(): FieldProfile {
+  getActiveField(): FieldProfile | undefined {
     const fields = this.getFields();
     const activeId = this.getActiveFieldId();
-    return fields.find(f => f.id === activeId) || fields[0] || DEFAULT_FIELDS[0];
+    return fields.find((f) => f.id === activeId) || fields[0];
   },
 
   addField(fieldData: Omit<FieldProfile, 'id' | 'nasaGrid'>): FieldProfile {
@@ -248,7 +254,17 @@ export const StorageService = {
   },
 
   updateField(updated: FieldProfile) {
-    const fields = this.getFields().map(f => (f.id === updated.id ? updated : f));
+    const { cell, distanceKm } = findNearestNasaGrid(updated.lat, updated.lon);
+    const enriched: FieldProfile = {
+      ...updated,
+      nasaGrid: {
+        cellId: cell.cellId,
+        lat: cell.lat,
+        lon: cell.lon,
+        distanceKm,
+      },
+    };
+    const fields = this.getFields().map(f => (f.id === enriched.id ? enriched : f));
     this.saveFields(fields);
   },
 
@@ -277,12 +293,7 @@ export const StorageService = {
       const data = localStorage.getItem(STORAGE_KEYS.TASKS);
       if (data) return JSON.parse(data);
     } catch {}
-    // Auto-generate seed tasks
-    const field = this.getActiveField();
-    const brief = analyzeFieldAgronomy(field, this.getWeather());
-    const initialTasks = generateTasksFromBrief(brief, field);
-    localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(initialTasks));
-    return initialTasks;
+    return [];
   },
 
   saveTasks(tasks: FarmTask[]) {
@@ -325,7 +336,7 @@ export const StorageService = {
 
     // Adaptive Learning Check: Update Field Profile Memory
     const field = this.getActiveField();
-    if (feedback.feedbackType === 'soil_still_dry') {
+    if (field && feedback.feedbackType === 'soil_still_dry') {
       field.adaptiveMemory = {
         ...field.adaptiveMemory,
         soilAdjustment: 'Phản hồi nhiều lần đất khô nhanh: AI nâng độ nhạy tưới và hạ giả định giữ ẩm',
@@ -333,7 +344,7 @@ export const StorageService = {
         consecutiveDryAlerts: (field.adaptiveMemory?.consecutiveDryAlerts || 0) + 1,
       };
       this.updateField(field);
-    } else if (feedback.feedbackType === 'soil_too_wet') {
+    } else if (field && feedback.feedbackType === 'soil_too_wet') {
       field.adaptiveMemory = {
         ...field.adaptiveMemory,
         soilAdjustment: 'Phản hồi đất quá ẩm/đọng nước: AI tăng cường cảnh báo thoát nước và hoãn tưới',

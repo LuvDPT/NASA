@@ -20,11 +20,15 @@ export const PlantingCalendarView: React.FC<PlantingCalendarViewProps> = ({ acti
   const [selectedCrop, setSelectedCrop] = useState<string>(activeField.crop.name);
   const [selectedDetail, setSelectedDetail] = useState<PlantingRiskEvaluation | null>(null);
 
-  const crops = [
-    { name: 'Lúa (ST25 / Đài Thơm)', cat: 'rice' },
-    { name: 'Rau cải xanh vụ đông', cat: 'vegetable' },
-    { name: 'Ngô lai F1 (Bắp)', cat: 'maize' },
-  ];
+  const crops = Array.from(
+    new Set([
+      activeField.crop.name,
+      'Lúa (ST25 / Đài Thơm)',
+      'Rau cải xanh vụ đông',
+      'Ngô lai F1 (Bắp)',
+      'Đậu tương / Lạc (Họ Đậu)',
+    ])
+  );
 
   const evaluations = evaluatePlantingCalendar(selectedCrop, activeField.soilType, activeField.lat);
 
@@ -65,10 +69,10 @@ export const PlantingCalendarView: React.FC<PlantingCalendarViewProps> = ({ acti
             Đánh giá xác suất rủi ro lịch sử 21 năm (2005–2025)
           </div>
           <h1 className="text-xl sm:text-2xl font-bold text-stone-900 mt-1">
-            Lịch Thời Vụ Gieo Trồng NASA POWER
+            Lịch Thời Vụ Gieo Trồng Theo Dữ Liệu Khí Hậu
           </h1>
           <p className="text-xs sm:text-sm text-stone-500 mt-0.5">
-            Dựa trên 21 năm quan trắc vệ tinh tại ô lưới <strong>{activeField.nasaGrid.cellId}</strong> ({activeField.province}). Đánh giá số năm xuất hiện điều kiện bất lợi trong các giai đoạn sinh trưởng nhạy cảm.
+            Dựa trên 21 năm quan trắc tại điểm khí hậu <strong>{activeField.nasaGrid.cellId}</strong> ({activeField.province}). Đánh giá số năm xuất hiện điều kiện bất lợi trong các giai đoạn sinh trưởng nhạy cảm.
           </p>
         </div>
 
@@ -84,8 +88,8 @@ export const PlantingCalendarView: React.FC<PlantingCalendarViewProps> = ({ acti
             className="px-3 py-2 border border-stone-300 rounded-xl bg-white font-bold text-xs text-stone-900 shadow-2xs"
           >
             {crops.map(c => (
-              <option key={c.name} value={c.name}>
-                {c.name}
+              <option key={c} value={c}>
+                {c}
               </option>
             ))}
           </select>
@@ -94,7 +98,7 @@ export const PlantingCalendarView: React.FC<PlantingCalendarViewProps> = ({ acti
 
       {/* Legend & Notation Guide */}
       <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <span className="font-bold text-stone-700">Ký hiệu tiêu chuẩn Space Apps:</span>
+        <span className="font-bold text-stone-700">Chú giải mức độ phù hợp:</span>
         <div className="flex flex-wrap items-center gap-4">
           <span className="flex items-center gap-1.5">
             <span className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-800 font-black inline-flex items-center justify-center">

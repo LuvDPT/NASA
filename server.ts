@@ -1,5 +1,6 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
@@ -10,16 +11,82 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
-// Initialize GoogleGenAI server-side with telemetry header
-const apiKey = process.env.GEMINI_API_KEY || '';
-let ai: GoogleGenAI | null = null;
-if (apiKey) {
-  ai = new GoogleGenAI({
-    apiKey,
+// Load Firebase client config to verify admin ID tokens server-side
+let firebaseApiKey = '';
+let firebaseProjectId = '';
+let firestoreDatabaseId = '(default)';
+try {
+  const fbConfigPath = path.join(__dirname, 'firebase-applet-config.json');
+  if (fs.existsSync(fbConfigPath)) {
+    const fbJson = JSON.parse(fs.readFileSync(fbConfigPath, 'utf-8'));
+    firebaseApiKey = fbJson.apiKey || '';
+    firebaseProjectId = fbJson.projectId || '';
+    firestoreDatabaseId = fbJson.firestoreDatabaseId || '(default)';
+  }
+} catch {
+  firebaseApiKey = '';
+}
+const ADMIN_EMAIL = 'fss01211cg@gmail.com';
+
+async function requireAdminMiddleware(req: Request, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+    if (!token || !firebaseApiKey) {
+      return res.status(401).json({ error: 'Yêu cầu đăng nhập tài khoản Quản trị viên.' });
+    }
+    const verifyRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: token }),
+      }
+    );
+    if (!verifyRes.ok) {
+      return res.status(401).json({ error: 'Phiên đăng nhập quản trị không hợp lệ.' });
+    }
+    const verifyJson = (await verifyRes.json()) as {
+      users?: Array<{ email?: string; emailVerified?: boolean; localId?: string }>;
+    };
+    const matchedUser = verifyJson.users?.[0];
+    if (!matchedUser || !matchedUser.emailVerified) {
+      return res.status(403).json({ error: 'Tài khoản quản trị cần được xác thực email.' });
+    }
+
+    const isBootstrapAdmin =
+      matchedUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+    if (isBootstrapAdmin) {
+      return next();
+    }
+
+    // Check if user was promoted to Admin in Firestore /admins/{uid}
+    if (firebaseProjectId && matchedUser.localId) {
+      const adminDocUrl = `https://firestore.googleapis.com/v1/projects/${firebaseProjectId}/databases/${firestoreDatabaseId}/documents/admins/${matchedUser.localId}`;
+      const adminDocRes = await fetch(adminDocUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (adminDocRes.ok) {
+        return next();
+      }
+    }
+
+    return res.status(403).json({ error: 'Chỉ quản trị viên mới có quyền truy cập chức năng này.' });
+  } catch {
+    return res.status(401).json({ error: 'Không thể xác thực quyền quản trị.' });
+  }
+}
+
+// Initialize GoogleGenAI server-side dynamically with telemetry header
+function getGeminiClient(): GoogleGenAI | null {
+  const key = process.env.GEMINI_API_KEY?.trim();
+  if (!key) return null;
+  return new GoogleGenAI({
+    apiKey: key,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -28,13 +95,52 @@ if (apiKey) {
   });
 }
 
+async function withGeminiRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastError = err;
+      const msg = String(err?.message || '').toLowerCase();
+      const status = err?.status || err?.code;
+      const isNonRetryable =
+        status === 400 ||
+        status === 401 ||
+        status === 403 ||
+        msg.includes('api_key_invalid') ||
+        msg.includes('permission_denied');
+      if (isNonRetryable || attempt === maxAttempts) {
+        throw err;
+      }
+      await new Promise((r) => setTimeout(r, 450 * attempt));
+    }
+  }
+  throw lastError;
+}
+
+function extractGeminiText(response: any): string {
+  if (typeof response?.text === 'string' && response.text.trim()) {
+    return response.text.trim();
+  }
+  const parts = response?.candidates?.[0]?.content?.parts;
+  if (Array.isArray(parts)) {
+    const joined = parts
+      .map((p: any) => (typeof p?.text === 'string' ? p.text : ''))
+      .join('')
+      .trim();
+    if (joined) return joined;
+  }
+  return '';
+}
+
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    geminiConfigured: !!apiKey,
+    geminiConfigured: !!process.env.GEMINI_API_KEY?.trim(),
     timestamp: new Date().toISOString(),
-    service: 'AgriNASA AI Full-Stack Server',
+    service: 'CropCast Full-Stack Server',
   });
 });
 
@@ -58,6 +164,7 @@ app.post('/api/gemini/advisor', async (req: Request, res: Response) => {
   try {
     const { field, weather, ruleAnalysis, feedbackHistory } = req.body;
 
+    const ai = getGeminiClient();
     if (!ai) {
       return res.status(200).json({
         success: false,
@@ -67,29 +174,35 @@ app.post('/api/gemini/advisor', async (req: Request, res: Response) => {
       });
     }
 
+    const cropName = field?.crop?.name || field?.cropName || 'Cây trồng';
+    const variety = field?.crop?.variety || field?.variety || 'Chuẩn';
+    const stageName = field?.crop?.currentStage || field?.stageName || 'Sinh trưởng';
+    const waterSrc = typeof field?.waterSource === 'string' ? field.waterSource : field?.waterSource?.type || 'Nước kênh/ao';
+    const waterNotes = field?.waterSource?.notes || field?.waterNotes || 'Bình thường';
+
     const prompt = `
-Bạn là Trợ lý AI Canh tác Nông nghiệp Chuyên gia AgriNASA AI, phân tích dữ liệu cho nông dân Việt Nam.
+Bạn là Trợ lý AI Canh tác Nông nghiệp Chuyên gia CropCast, phân tích dữ liệu cho nông dân Việt Nam.
 Thông tin thửa ruộng:
 - Tên ruộng: ${field?.name || 'Ruộng đang chọn'}
 - Địa điểm: ${field?.province}, ${field?.district} (Tọa độ: ${field?.lat}°N, ${field?.lon}°E)
 - Ô lưới NASA POWER gần nhất: ${field?.nasaGrid?.lat}°N, ${field?.nasaGrid?.lon}°E (Cách ruộng: ${field?.nasaGrid?.distanceKm} km)
-- Cây trồng: ${field?.cropName} (Giống: ${field?.variety || 'Chuẩn'}, Giai đoạn: ${field?.stageName})
-- Loại đất: ${field?.soilType} (Đặc tính: ${field?.drainage})
-- Nguồn nước: ${field?.waterSource} (${field?.waterNotes || 'Bình thường'})
+- Cây trồng: ${cropName} (Giống: ${variety}, Giai đoạn: ${stageName})
+- Loại đất: ${field?.soilType} (Đặc tính: ${field?.soilCharacteristics?.drainage || field?.drainage || 'trung bình'})
+- Nguồn nước: ${waterSrc} (${waterNotes})
 - Mục tiêu canh tác ưu tiên: ${field?.primaryGoal}
 
 Dữ liệu quan trắc / thời tiết hiện tại:
 - Nhiệt độ hiện tại: ${weather?.temp}°C (Thấp nhất: ${weather?.minTemp}°C, Cao nhất: ${weather?.maxTemp}°C)
 - Lượng mưa: ${weather?.rain} mm
 - Độ ẩm không khí: ${weather?.humidity}%
-- Độ ẩm đất vùng rễ (GWETROOT): ${(weather?.gwetroot * 100).toFixed(0)}%
-- Độ ẩm tầng mặt (GWETTOP): ${(weather?.gwettop * 100).toFixed(0)}%
+- Độ ẩm đất vùng rễ (GWETROOT): ${((weather?.gwetroot || 0.5) * 100).toFixed(0)}%
+- Độ ẩm tầng mặt (GWETTOP): ${((weather?.gwettop || 0.5) * 100).toFixed(0)}%
 - Bức xạ mặt trời: ${weather?.solarRadiation} MJ/m²/ngày
 
 Dữ liệu NASA POWER lịch sử 21 năm (2005-2025) cùng kỳ:
 - Nhiệt độ trung bình lịch sử: ${weather?.historicalBaseline?.avgTemp}°C
 - Lượng mưa trung bình lịch sử: ${weather?.historicalBaseline?.avgRain} mm
-- Khác biệt so với lịch sử: ${weather?.temp - (weather?.historicalBaseline?.avgTemp || 26) > 0 ? '+' : ''}${(weather?.temp - (weather?.historicalBaseline?.avgTemp || 26)).toFixed(1)}°C
+- Khác biệt so với lịch sử: ${(weather?.temp || 26) - (weather?.historicalBaseline?.avgTemp || 26) > 0 ? '+' : ''}${((weather?.temp || 26) - (weather?.historicalBaseline?.avgTemp || 26)).toFixed(1)}°C
 
 Phân tích từ Bộ máy Nông học:
 - Tình trạng rủi ro: ${ruleAnalysis?.riskLevel || 'Bình thường'}
@@ -123,16 +236,18 @@ Yêu cầu xuất ra định dạng JSON chính xác:
 }
 `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: 'Bạn là chuyên gia nông học Việt Nam thuộc hệ thống AgriNASA AI. Trả lời thuần định dạng JSON chuẩn. Không dùng markdown code fences.',
-        responseMimeType: 'application/json',
-      },
-    });
+    const response = await withGeminiRetry(() =>
+      ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: prompt,
+        config: {
+          systemInstruction: 'Bạn là chuyên gia nông học Việt Nam thuộc hệ thống CropCast. Trả lời thuần định dạng JSON chuẩn. Không dùng markdown code fences.',
+          responseMimeType: 'application/json',
+        },
+      })
+    );
 
-    const text = response.text || '{}';
+    const text = extractGeminiText(response) || '{}';
     let parsedData;
     try {
       parsedData = JSON.parse(text);
@@ -144,7 +259,7 @@ Yêu cầu xuất ra định dạng JSON chính xác:
     res.json({
       success: true,
       advice: parsedData,
-      source: 'gemini-3.8-flash',
+      source: 'gemini-4-hydrogen',
     });
   } catch (error: any) {
     console.error('Gemini Advisor Error:', error);
@@ -155,63 +270,252 @@ Yêu cầu xuất ra định dạng JSON chính xác:
   }
 });
 
-// Gemini Q&A Chat endpoint
-app.post('/api/gemini/chat', async (req: Request, res: Response) => {
+// Gemini Rotation Rethink endpoint: farmer rejects current best strategy with a reason -> AI decides a better one
+app.post('/api/gemini/rotation-rethink', async (req: Request, res: Response) => {
   try {
-    const { message, field, conversationHistory } = req.body;
+    const {
+      field,
+      weather,
+      rejectedStrategy,
+      rejectionReason,
+      previouslyRejectedTitles,
+      priorities,
+      constraints,
+    } = req.body;
 
+    const ai = getGeminiClient();
     if (!ai) {
       return res.status(200).json({
         success: false,
-        reply: 'Khóa API Gemini chưa được cấu hình trong Secrets. Vui lòng thêm GEMINI_API_KEY để kích hoạt tính năng trò chuyện AI trực tiếp.',
+        fallback: true,
+        strategy: null,
       });
     }
 
-    const systemPrompt = `
-Bạn là AgriNASA AI - Trợ lý nông nghiệp thông minh cá nhân hóa của người nông dân Việt Nam.
-Thông tin thửa ruộng hiện tại:
-- Tên: ${field?.name || 'Thửa ruộng của bạn'}
-- Vị trí: ${field?.province || 'Việt Nam'} (Ô lưới NASA: ${field?.nasaGrid?.lat}°N, ${field?.nasaGrid?.lon}°E)
-- Cây trồng: ${field?.cropName || 'Cây trồng'} (Giống: ${field?.variety || 'Thông dụng'}, Giai đoạn: ${field?.stageName || 'Sinh trưởng'})
-- Loại đất: ${field?.soilType || 'Đất thịt'}
-- Nguồn nước: ${field?.waterSource || 'Nước mương'}
+    const prompt = `
+Bạn là chuyên gia nông học Việt Nam của hệ thống CropCast.
+Nông dân đang xem xét chiến lược luân canh tối ưu cho thửa ruộng của họ, nhưng họ ĐÃ TỪ CHỐI phương án vừa đề xuất vì lý do thực tế dưới đây. Hãy đề xuất MỘT (1) chiến lược luân canh thay thế TỐT HƠN, giải quyết triệt để lý do từ chối của nông dân.
 
-Nguyên tắc trả lời:
-1. Luôn nói tiếng Việt gần gũi, thực tế, dễ hiểu cho người làm nông.
-2. Dựa trên thông tin giống cây, loại đất và thời tiết cụ thể của thửa ruộng, không đưa lời khuyên chung chung.
-3. Không tự sáng tác số đo thuốc sâu hay liều lượng độc hại nếu thiếu kiểm nghiệm cụ thể; khuyên nông dân kiểm tra thực địa trước khi phun tưới.
-4. Trình bày rõ ràng, dùng gạch đầu dòng ngắn gọn.
+Thông tin thửa ruộng:
+- Tên ruộng: ${field?.name}
+- Địa phương: ${field?.province}, ${field?.district} (${field?.lat}°B, ${field?.lon}°Đ)
+- Loại đất: ${field?.soilType}, Thoát nước: ${field?.soilCharacteristics?.drainage}
+- Cây hiện tại: ${field?.crop?.name} (Họ: ${field?.crop?.seedFamily || 'chưa rõ'}, Giống: ${field?.crop?.variety})
+- Nguồn nước: ${field?.waterSource?.type} (${constraints?.waterAvailability || 'seasonal_limited'})
+- Thiết bị/lao động: ${constraints?.equipmentAccess || 'basic_manual'}
+- Đầu ra mong muốn: ${constraints?.marketPreference || 'mixed_family'}
+- Ưu tiên nông dân: ${JSON.stringify(priorities || [])}
+- Khí hậu hiện tại: Nhiệt độ ${weather?.temp}°C, Ẩm rễ ${Math.round((weather?.gwetroot || 0.5) * 100)}%, Độ ẩm KK ${weather?.humidity}%
+
+Chiến lược vừa bị từ chối:
+- Tên phương án: ${rejectedStrategy?.title}
+- Cây đề xuất trước đó: ${rejectedStrategy?.nextCropName}
+- Các phương án đã bị bỏ qua trước đó (KHÔNG lặp lại): ${JSON.stringify(previouslyRejectedTitles || [])}
+
+LÝ DO NÔNG DÂN KHÔNG ÁP DỤNG ĐƯỢC PHƯƠNG ÁN TRƯỚC:
+"${rejectionReason}"
+
+Hãy trả về ĐÚNG 1 JSON Object theo cấu trúc sau (bằng tiếng Việt dễ hiểu cho nông dân, không dùng mã kỹ thuật khó hiểu):
+{
+  "title": "Tên chiến lược luân canh mới tốt hơn (ngắn gọn, rõ cây trồng mới)",
+  "sequenceSummary": "Chuỗi vụ: Cây hiện tại → Cây luân canh mới → Vụ kế tiếp",
+  "nextCropFamily": "poaceae" | "fabaceae" | "brassicaceae" | "solanaceae" | "cucurbitaceae" | "other_perennial",
+  "nextCropName": "Tên loại cây trồng cụ thể phù hợp lý do của nông dân",
+  "suitabilityScore": số nguyên từ 78 đến 98,
+  "whySuggested": "Giải thích 2-3 câu vì sao phương án mới này giải quyết đúng lý do nông dân nêu ra và hợp với đất/thời tiết",
+  "supportingEvidence": ["Bằng chứng 1 từ đất/khí hậu", "Bằng chứng 2", "Bằng chứng 3"],
+  "benefits": {
+    "nutrientCycling": "Tác động dinh dưỡng đất",
+    "waterDemand": "Nhu cầu nước tưới",
+    "erosionAndOrganicMatter": "Chống xói mòn và mùn đất",
+    "pestCycleDisruption": "Khả năng ngắt sâu bệnh",
+    "forageAndIncome": "Đầu ra thị trường / chăn nuôi / thu nhập"
+  },
+  "informationGaps": ["Khoảng trống thông tin cần lưu ý 1", "Khoảng trống 2"],
+  "localReviewRisks": ["Rủi ro cần kiểm tra ngoài ruộng / hỏi khuyến nông 1", "Rủi ro 2"]
+}
 `;
 
-    const chat = ai.chats.create({
-      model: 'gemini-3.8-flash',
-      config: {
-        systemInstruction: systemPrompt,
-      },
-    });
+    const response = await withGeminiRetry(() =>
+      ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: prompt,
+        config: {
+          systemInstruction:
+            'Bạn là chuyên gia quy hoạch luân canh nông nghiệp CropCast. Trả về đúng JSON hợp lệ, không markdown.',
+          responseMimeType: 'application/json',
+        },
+      })
+    );
 
-    // Send previous history if any
-    if (Array.isArray(conversationHistory)) {
-      for (const item of conversationHistory.slice(-4)) {
-        if (item.role === 'user') {
-          // ignore or pre-feed
-        }
-      }
+    const text = extractGeminiText(response) || '{}';
+    let parsed: any;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      parsed = JSON.parse(cleaned);
     }
 
-    const response = await chat.sendMessage({
-      message: message || 'Xin chào, ruộng của tôi hôm nay cần chú ý gì?',
-    });
+    const validFamilies = ['poaceae', 'fabaceae', 'brassicaceae', 'solanaceae', 'cucurbitaceae', 'other_perennial'];
+    const safeFamily = validFamilies.includes(parsed.nextCropFamily)
+      ? parsed.nextCropFamily
+      : 'other_perennial';
 
     res.json({
       success: true,
-      reply: response.text,
+      source: 'gemini-4-hydrogen',
+      strategy: {
+        id: `rot-ai-${Date.now()}`,
+        isCurrentBaseline: false,
+        title: parsed.title || `Luân canh điều chỉnh: ${parsed.nextCropName || 'Cây ngắn ngày phù hợp'}`,
+        sequenceSummary: parsed.sequenceSummary || `${field?.crop?.name} → ${parsed.nextCropName}`,
+        nextCropFamily: safeFamily,
+        nextCropName: parsed.nextCropName || 'Cây luân canh phù hợp',
+        suitabilityScore: Math.min(98, Math.max(75, Number(parsed.suitabilityScore) || 88)),
+        whySuggested: parsed.whySuggested || 'Đã điều chỉnh theo phản hồi thực tế của bạn.',
+        supportingEvidence: Array.isArray(parsed.supportingEvidence) ? parsed.supportingEvidence : [],
+        benefits: parsed.benefits || {
+          nutrientCycling: 'Cân bằng dinh dưỡng đất giữa các vụ.',
+          waterDemand: 'Phù hợp nguồn nước hiện có.',
+          erosionAndOrganicMatter: 'Che phủ đất và bổ sung hữu cơ.',
+          pestCycleDisruption: 'Ngắt chu kỳ sâu bệnh vụ cũ.',
+          forageAndIncome: 'Phù hợp điều kiện tiêu thụ của hộ gia đình.',
+        },
+        informationGaps: Array.isArray(parsed.informationGaps) ? parsed.informationGaps : [],
+        localReviewRisks: Array.isArray(parsed.localReviewRisks) ? parsed.localReviewRisks : [],
+        alignedPriorities: Array.isArray(priorities) ? priorities : [],
+      },
     });
   } catch (error: any) {
-    console.error('Gemini Chat Error:', error);
-    res.status(500).json({
+    console.error('Gemini Rotation Rethink Error:', error);
+    res.status(200).json({
       success: false,
-      reply: 'Rất tiếc, đã có lỗi kết nối tới trợ lý AI. Vui lòng thử lại sau giây lát.',
+      fallback: true,
+      strategy: null,
+    });
+  }
+});
+
+// Gemini Q&A Chat endpoint
+app.post('/api/gemini/chat', async (req: Request, res: Response) => {
+  try {
+    const { message, field, weather, conversationHistory } = req.body;
+    const userMessage = typeof message === 'string' ? message.trim() : '';
+
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(200).json({
+        success: false,
+        fallback: true,
+        errorCode: 'MISSING_API_KEY',
+        reply:
+          'Trợ lý AI hiện chưa được gắn khóa kết nối GEMINI_API_KEY trên máy chủ. Bạn vẫn có thể xem khuyến nghị tự động theo dữ liệu khí hậu ở mục Tổng quan và Luân canh & Đất.',
+      });
+    }
+
+    const cropName = field?.crop?.name || field?.cropName || 'Cây trồng';
+    const variety = field?.crop?.variety || field?.variety || 'Thông dụng';
+    const stageName = field?.crop?.currentStage || field?.stageName || 'Đang sinh trưởng';
+    const waterSrc =
+      typeof field?.waterSource === 'string'
+        ? field.waterSource
+        : field?.waterSource?.type || 'Nước kênh/ao';
+
+    const weatherSummary = weather
+      ? `Nhiệt độ ${weather.temp}°C (thấp nhất ${weather.minTemp}°C, cao nhất ${weather.maxTemp}°C), lượng mưa ${weather.rain} mm, ẩm không khí ${weather.humidity}%, ẩm đất vùng rễ ${Math.round((weather.gwetroot || 0.5) * 100)}%, bức xạ ${weather.solarRadiation} MJ/m²/ngày.`
+      : 'Chưa có số liệu thời tiết tức thời.';
+
+    const systemPrompt = `
+Bạn là CropCast - Trợ lý nông nghiệp thông minh cá nhân hóa của người nông dân Việt Nam.
+Thông tin thửa ruộng hiện tại:
+- Tên ruộng: ${field?.name || 'Thửa ruộng của bạn'}
+- Vị trí: ${field?.province || 'Việt Nam'}, ${field?.district || ''} (Điểm khí hậu: ${field?.nasaGrid?.lat ?? field?.lat}°N, ${field?.nasaGrid?.lon ?? field?.lon}°E)
+- Cây trồng: ${cropName} (Giống: ${variety}, Giai đoạn: ${stageName})
+- Loại đất: ${field?.soilType || 'Đất thịt'} (Thoát nước: ${field?.soilCharacteristics?.drainage || 'trung bình'})
+- Nguồn nước: ${waterSrc}
+- Thời tiết hiện tại: ${weatherSummary}
+
+Nguyên tắc trả lời:
+1. Luôn nói tiếng Việt thuần, gần gũi, thực tế, dễ hiểu cho người làm nông (tránh dùng từ tiếng Anh chuyên ngành khó hiểu).
+2. Dựa trên thông tin giống cây, loại đất, nguồn nước và thời tiết cụ thể của thửa ruộng, không đưa lời khuyên chung chung.
+3. Không tự sáng tác liều lượng thuốc bảo vệ thực vật độc hại nếu thiếu kiểm nghiệm cụ thể; khuyên nông dân kiểm tra thực địa trước khi phun tưới.
+4. Trình bày rõ ràng, dùng gạch đầu dòng ngắn gọn, súc tích.
+`;
+
+    // Format valid alternating history starting from the first user turn
+    const sanitizedHistory: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+    if (Array.isArray(conversationHistory)) {
+      const recent = conversationHistory.slice(-8);
+      for (const item of recent) {
+        const text = typeof item?.parts === 'string' ? item.parts.trim() : '';
+        if (!text) continue;
+        const role = item.role === 'user' ? 'user' : 'model';
+        // Gemini chat history MUST start with 'user' and alternate roles cleanly
+        if (sanitizedHistory.length === 0 && role !== 'user') continue;
+        const lastRole = sanitizedHistory[sanitizedHistory.length - 1]?.role;
+        if (lastRole === role) {
+          sanitizedHistory[sanitizedHistory.length - 1].parts[0].text += `\n${text}`;
+        } else {
+          sanitizedHistory.push({ role, parts: [{ text }] });
+        }
+      }
+      // Ensure history ends on 'model' before calling sendMessage (or drop trailing user)
+      if (sanitizedHistory.length > 0 && sanitizedHistory[sanitizedHistory.length - 1].role === 'user') {
+        sanitizedHistory.pop();
+      }
+    }
+
+    const promptText = userMessage || 'Xin chào, ruộng của tôi hôm nay cần chú ý gì?';
+
+    const replyText = await withGeminiRetry(async () => {
+      const chat = ai.chats.create({
+        model: 'gemini-4-hydrogen',
+        history: sanitizedHistory,
+        config: {
+          systemInstruction: systemPrompt,
+        },
+      });
+
+      const response = await chat.sendMessage({
+        message: promptText,
+      });
+      const extracted = extractGeminiText(response);
+      if (extracted) return extracted;
+
+      // Fallback single-turn generateContent if chat response returned empty
+      const directRes = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: promptText,
+        config: {
+          systemInstruction: systemPrompt,
+        },
+      });
+      const directText = extractGeminiText(directRes);
+      if (!directText) {
+        throw new Error('EMPTY_MODEL_RESPONSE');
+      }
+      return directText;
+    }, 3);
+
+    res.json({
+      success: true,
+      reply: replyText,
+    });
+  } catch (error: any) {
+    console.error('Gemini Chat Error:', error?.status || error?.code, error?.message || error);
+    const status = error?.status || error?.code;
+    const msg = String(error?.message || '').toLowerCase();
+    let userFriendlyError = 'Máy chủ AI đang bận hoặc tạm gián đoạn kết nối. Vui lòng thử gửi lại sau vài giây.';
+    if (status === 429 || msg.includes('resource_exhausted') || msg.includes('quota')) {
+      userFriendlyError = 'Hệ thống AI đang quá tải lượt hỏi tạm thời (vượt hạn mức phút). Vui lòng đợi 10–15 giây rồi hỏi lại.';
+    } else if (status === 400 || status === 403 || msg.includes('api_key')) {
+      userFriendlyError = 'Khóa kết nối Gemini AI chưa hợp lệ hoặc đã hết hạn. Quản trị viên cần kiểm tra lại GEMINI_API_KEY trong phần Secrets.';
+    }
+    res.status(503).json({
+      success: false,
+      errorCode: status || 'GEMINI_ERROR',
+      reply: userFriendlyError,
     });
   }
 });
@@ -225,7 +529,9 @@ import {
   executeNasaPowerSync,
   toggleAutoSync,
   previewUploadedCsv,
+  previewBatchCsvFiles,
   commitImportedData,
+  commitBatchCsvFiles,
   rollbackDataVersion,
   getSyncLogs,
   getDataImports,
@@ -240,6 +546,9 @@ app.get('/api/data-status', async (_req: Request, res: Response) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Protect all /api/admin/* endpoints strictly for verified admin account
+app.use('/api/admin', requireAdminMiddleware);
 
 // Admin status
 app.get('/api/admin/status', async (_req: Request, res: Response) => {
@@ -297,6 +606,34 @@ app.post('/api/admin/import-data', async (req: Request, res: Response) => {
   }
 });
 
+// Preview multiple CSV files across multiple folders
+app.post('/api/admin/preview-batch', (req: Request, res: Response) => {
+  try {
+    const { files } = req.body;
+    if (!Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ error: 'Chưa có tệp CSV nào trong danh sách' });
+    }
+    const batchResult = previewBatchCsvFiles(files);
+    res.json(batchResult);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Lỗi khi kiểm tra hàng loạt tệp CSV' });
+  }
+});
+
+// Commit multiple CSV files across multiple folders
+app.post('/api/admin/import-batch', async (req: Request, res: Response) => {
+  try {
+    const { files } = req.body;
+    if (!Array.isArray(files) || files.length === 0) {
+      return res.status(400).json({ error: 'Chưa có tệp CSV nào để nhập' });
+    }
+    const result = await commitBatchCsvFiles(files);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message || 'Lỗi khi nhập dữ liệu hàng loạt' });
+  }
+});
+
 // Get sync logs & data imports
 app.get('/api/admin/sync-logs', (_req: Request, res: Response) => {
   res.json({
@@ -335,8 +672,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, () => {
-    console.log(`AgriNASA AI Full-Stack Server running on port ${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`CropCast Full-Stack Server running on port ${PORT}`);
   });
 }
 

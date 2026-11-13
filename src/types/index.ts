@@ -21,7 +21,17 @@ export type CropCategory =
   | 'vegetable'
   | 'maize'
   | 'fruit'
-  | 'industrial';
+  | 'industrial'
+  | 'legume'
+  | 'tuber';
+
+export type SeedFamilyId =
+  | 'poaceae'
+  | 'fabaceae'
+  | 'brassicaceae'
+  | 'solanaceae'
+  | 'cucurbitaceae'
+  | 'other_perennial';
 
 export interface NasaGridCell {
   cellId: string;
@@ -38,14 +48,20 @@ export interface NasaGridCell {
     avgGwettop: number;
     avgRh2m: number;
     avgSolarDwn: number;
-    riskMonthsCold: number[]; // e.g. [12, 1, 2]
-    riskMonthsDrought: number[]; // e.g. [3, 4]
-    riskMonthsFlood: number[]; // e.g. [8, 9, 10]
+    riskMonthsCold: number[];
+    riskMonthsDrought: number[];
+    riskMonthsFlood: number[];
   };
 }
 
 export interface FieldProfile {
   id: string;
+  ownerId?: string;
+  ownerName?: string;
+  sharedWithEmails?: string[];
+  sharedWithUids?: string[];
+  activeShareToken?: string;
+  isSharedWithMe?: boolean;
   name: string;
   province: string;
   district: string;
@@ -72,6 +88,7 @@ export interface FieldProfile {
   };
   // Crop
   crop: {
+    seedFamily?: SeedFamilyId;
     name: string;
     category: CropCategory;
     variety: string;
@@ -101,6 +118,68 @@ export interface FieldProfile {
     consecutiveDryAlerts?: number;
     lastFeedbackDate?: string;
   };
+}
+
+export interface FieldShareRecord {
+  id: string;
+  fieldId: string;
+  fieldName: string;
+  ownerId: string;
+  ownerName: string;
+  shareType: 'link' | 'email';
+  targetEmail?: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface AdminUserSummary {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL?: string;
+  createdAt: string;
+  fieldCount: number;
+  totalAreaHa: number;
+  isAdmin: boolean;
+}
+
+export interface AdminFieldSummary {
+  id: string;
+  name: string;
+  ownerId: string;
+  ownerName: string;
+  ownerEmail: string;
+  province: string;
+  district: string;
+  lat: number;
+  lon: number;
+  areaHa: number;
+  cropName: string;
+  cropVariety: string;
+  currentStage: string;
+  soilType: SoilType;
+  waterSourceType: WaterSourceType;
+  nasaCellId: string;
+  nasaDistanceKm: number;
+  sharedCount: number;
+  createdAt: string;
+}
+
+export interface AdminPlatformStats {
+  totalUsers: number;
+  totalFields: number;
+  totalAreaHa: number;
+  totalTasks: number;
+  completedTasks: number;
+  pendingTasks: number;
+  totalFeedbacks: number;
+  totalActiveShares: number;
+  totalNasaDatasets: number;
+  users: AdminUserSummary[];
+  allFields: AdminFieldSummary[];
+  fieldsByProvince: Array<{ province: string; count: number; areaHa: number }>;
+  fieldsByCrop: Array<{ cropName: string; count: number }>;
+  fieldsBySoil: Array<{ soilType: string; count: number }>;
 }
 
 export type DataProvenanceType =
@@ -137,7 +216,7 @@ export interface WeatherObservation {
     avgGwettop: number;
     avgGwetroot: number;
     avgSolar: number;
-    sampleYears: number; // 21 years (2005-2025)
+    sampleYears: number;
   };
 }
 
@@ -167,6 +246,7 @@ export interface DailyAgronomicBrief {
 
 export interface FarmTask {
   id: string;
+  ownerId?: string;
   fieldId: string;
   title: string;
   scheduledTime: string;
@@ -190,6 +270,7 @@ export type FeedbackType =
 
 export interface FeedbackRecord {
   id: string;
+  ownerId?: string;
   fieldId: string;
   timestamp: string;
   feedbackType: FeedbackType;
@@ -203,8 +284,8 @@ export interface PlantingRiskEvaluation {
   variety: string;
   month: number;
   status: 'optimal' | 'caution' | 'risk' | 'insufficient';
-  score: number; // 0-100
-  yearsSurveyed: number; // 21
+  score: number;
+  yearsSurveyed: number;
   adverseYearsCount: number;
   adverseDaysAvg: number;
   thresholdCondition: string;
@@ -223,8 +304,8 @@ export interface DataImportRecord {
   status: 'PENDING' | 'COMPLETED' | 'FAILED' | 'ROLLED_BACK';
   version: string;
   importedBy: string;
-  errorSummary?: string;
   createdAt: string;
+  errorSummary?: string;
 }
 
 export interface SyncLogRecord {
@@ -266,4 +347,62 @@ export interface CsvPreviewResult {
   sampleRows: Array<Record<string, any>>;
   errors: string[];
   duplicateCount: number;
+}
+
+export type FarmerPriorityId =
+  | 'water_saving'
+  | 'nitrogen_fixing'
+  | 'erosion_control'
+  | 'pest_break'
+  | 'supplemental_income'
+  | 'organic_matter';
+
+export interface FarmerConstraints {
+  waterAvailability: 'abundant' | 'seasonal_limited' | 'scarce';
+  equipmentAccess: 'mechanized' | 'basic_manual';
+  marketPreference: 'cash_crop' | 'forage_livestock' | 'mixed_family';
+}
+
+export interface BareFieldMonthAnalysis {
+  month: number;
+  monthLabel: string;
+  fieldState: 'active_crop' | 'harvest_transition' | 'bare_fallow';
+  stressLevel: 'low' | 'moderate' | 'high';
+  dominantRisk: string;
+  soilMoisturePct: number;
+  evaporationRisk: 'Thấp' | 'Trung bình' | 'Cao';
+  frostOrColdRisk: boolean;
+  extremeRainRisk: boolean;
+  recommendationNote: string;
+}
+
+export interface RotationStrategy {
+  id: string;
+  isCurrentBaseline: boolean;
+  title: string;
+  sequenceSummary: string;
+  nextCropFamily: SeedFamilyId;
+  nextCropName: string;
+  suitabilityScore: number;
+  whySuggested: string;
+  supportingEvidence: string[];
+  benefits: {
+    nutrientCycling: string;
+    waterDemand: string;
+    erosionAndOrganicMatter: string;
+    pestCycleDisruption: string;
+    forageAndIncome: string;
+  };
+  informationGaps: string[];
+  localReviewRisks: string[];
+  alignedPriorities: FarmerPriorityId[];
+}
+
+export interface AppUser {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL?: string;
+  emailVerified: boolean;
+  isAdmin: boolean;
 }
